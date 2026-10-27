@@ -744,9 +744,9 @@ fun BloodPressureZoneChart(systolic: Int, diastolic: Int) {
         val padT = 8.dp.toPx()
         val padB = 34.dp.toPx()
         val xMin = 40f
-        val xMax = 130f
+        val xMax = 120f
         val yMin = 70f
-        val yMax = 200f
+        val yMax = 180f
         val plotW = (size.width - padL - padR).coerceAtLeast(1f)
         val plotH = (size.height - padT - padB).coerceAtLeast(1f)
         fun xOf(dia: Float) = padL + ((dia.coerceIn(xMin, xMax) - xMin) / (xMax - xMin)) * plotW
@@ -775,7 +775,7 @@ fun BloodPressureZoneChart(systolic: Int, diastolic: Int) {
         val dash = PathEffect.dashPathEffect(floatArrayOf(8.dp.toPx(), 5.dp.toPx()))
         drawLine(
             color = colors.ink,
-            start = Offset(mark.x, yOf(yMax)),
+            start = Offset(mark.x, mark.y),
             end = Offset(mark.x, yOf(yMin)),
             strokeWidth = 1.5.dp.toPx(),
             pathEffect = dash,
@@ -783,7 +783,7 @@ fun BloodPressureZoneChart(systolic: Int, diastolic: Int) {
         drawLine(
             color = colors.ink,
             start = Offset(xOf(xMin), mark.y),
-            end = Offset(xOf(xMax), mark.y),
+            end = Offset(mark.x, mark.y),
             strokeWidth = 1.5.dp.toPx(),
             pathEffect = dash,
         )
@@ -798,11 +798,10 @@ fun BloodPressureZoneChart(systolic: Int, diastolic: Int) {
             }
             val metrics = axis.fontMetrics
             axis.textAlign = android.graphics.Paint.Align.RIGHT
-            listOf(70, 90, 110, 130, 150).forEach { tick ->
+            listOf(70 to "70", 90 to "90", 110 to "110", 130 to "130", 150 to "150", 180 to "180+").forEach { (tick, label) ->
                 val tickY = yOf(tick.toFloat()) - (metrics.ascent + metrics.descent) / 2f
-                native.drawText(tick.toString(), padL - 6.dp.toPx(), tickY, axis)
+                native.drawText(label, padL - 6.dp.toPx(), tickY, axis)
             }
-            native.drawText("180+", padL - 6.dp.toPx(), yOf(180f) - (metrics.ascent + metrics.descent) / 2f, axis)
             val xBaseline = size.height - 4.dp.toPx()
             listOf(40 to "40", 60 to "60", 80 to "80", 90 to "90", 120 to "120+").forEach { (tick, label) ->
                 axis.textAlign = when (tick) {
@@ -831,7 +830,7 @@ fun BloodPressureZoneChart(systolic: Int, diastolic: Int) {
             zoneLabel("Normal", 60f, 95f, Color(0xFF14532D), 12f)
             zoneLabel("Elevated", 60f, 125f, Color(0xFF713F12), 9f)
             zoneLabel("Stage 1 Hypertension", 65f, 137f, Color(0xFF9F1239), 10f)
-            zoneLabel("Stage 2 Hypertension", 104f, 158f, Color.White, 11f)
+            zoneLabel("Stage 2 Hypertension", 85f, 158f, Color.White, 11f)
         }
     }
     Text(
