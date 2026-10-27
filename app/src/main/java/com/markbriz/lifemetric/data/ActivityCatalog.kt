@@ -9,6 +9,38 @@ data class ActivityType(
     val schema: String,
 )
 
+enum class EntryMetricKind { Decimal, Whole }
+
+enum class EntryMetricPlacement { Before, After }
+
+/**
+ * Optional telemetry a workout entry can record. Attach a subset to an activity type
+ * so the same fields can be reused (for example speed + heart rate on running later).
+ */
+data class EntryMetric(
+    val id: String,
+    val label: String,
+    val hint: String? = null,
+    val kind: EntryMetricKind,
+    val placement: EntryMetricPlacement = EntryMetricPlacement.After,
+)
+
+object EntryMetrics {
+    const val RESISTANCE = "resistance"
+    const val AVG_SPEED = "avgSpeedMph"
+    const val AVG_RPM = "avgRpm"
+    const val AVG_HEART_RATE = "avgHeartRateBpm"
+    const val MAX_HEART_RATE = "maxHeartRateBpm"
+
+    val resistance = EntryMetric(RESISTANCE, "Resistance", kind = EntryMetricKind.Decimal, placement = EntryMetricPlacement.Before)
+    val avgSpeed = EntryMetric(AVG_SPEED, "Average speed (mph)", kind = EntryMetricKind.Decimal)
+    val avgRpm = EntryMetric(AVG_RPM, "Average RPM", kind = EntryMetricKind.Whole)
+    val avgHeartRate = EntryMetric(AVG_HEART_RATE, "Average heart rate (bpm)", kind = EntryMetricKind.Whole)
+    val maxHeartRate = EntryMetric(MAX_HEART_RATE, "Max BPM", kind = EntryMetricKind.Whole)
+
+    val all = listOf(resistance, avgSpeed, avgRpm, avgHeartRate, maxHeartRate)
+}
+
 object ActivityCatalog {
     val families = listOf(
         ActivityFamily("strength_resistance", "Strength & Resistance", "Strength"),
@@ -128,12 +160,43 @@ object ActivityCatalog {
 
     fun segmentFieldLabel(schema: String): String = if (schema == "distance_time") "Segment" else "Activity"
 
+    /**
+     * Extra entry fields for this activity. Cycling uses speed, cadence, and heart rate;
+     * add the same [EntryMetric]s to other type ids when those workouts need them.
+     */
+    fun entryMetrics(activityTypeId: String): List<EntryMetric> = when (activityTypeId) {
+        "cycling" -> listOf(
+            EntryMetrics.resistance,
+            EntryMetrics.avgSpeed,
+            EntryMetrics.avgRpm,
+            EntryMetrics.avgHeartRate,
+            EntryMetrics.maxHeartRate,
+        )
+        else -> emptyList()
+    }
+
     fun addEntryLabel(schema: String): String = when (schema) {
         "load" -> "Add set"
         "distance_time" -> "Add segment"
         "interval" -> "Add block"
         "note" -> "Add note"
-        else -> "Add entry"
+        else -> "Add block"
+    }
+
+    fun editEntryLabel(schema: String): String = when (schema) {
+        "load" -> "Edit set"
+        "distance_time" -> "Edit segment"
+        "interval" -> "Edit block"
+        "note" -> "Edit note"
+        else -> "Edit block"
+    }
+
+    fun entryNoun(schema: String, count: Int): String = when (schema) {
+        "load" -> if (count == 1) "set" else "sets"
+        "distance_time" -> if (count == 1) "segment" else "segments"
+        "interval" -> if (count == 1) "block" else "blocks"
+        "note" -> if (count == 1) "note" else "notes"
+        else -> if (count == 1) "block" else "blocks"
     }
 
     fun intervalDefaults(typeId: String): Triple<Int, Int?, Int?> =

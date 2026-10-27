@@ -119,6 +119,125 @@ class AccountExportTest {
     }
 
     @Test
+    fun missingCyclingMetricsImportAsZero() {
+        val raw = """
+            {
+              "format": "life-metric-account",
+              "version": 1,
+              "exportedAt": "2026-10-12T12:00:00.000Z",
+              "themeId": "mint",
+              "data": {
+                "plans": [{"id":"plan-c","name":"Ride","activityTypeId":"cycling","category":"cardio","machines":[{"id":"machine-c","name":"Indoor"}]}],
+                "workouts": [{"id":"workout-c","date":"2026-10-01","planId":"plan-c","activityTypeId":"cycling","entries":[{"id":"entry-c","planId":"plan-c","machineId":"machine-c","schema":"distance_time","distanceMi":12.4,"durationSec":2400}]}],
+                "weightRecords": [],
+                "bloodPressureReadings": [],
+                "profile": {"firstName":"Ada","lastName":"Lovelace"}
+              }
+            }
+        """.trimIndent()
+        val entry = parseAccountExport(raw).data.workouts[0].entries[0]
+        assertEquals(0.0, entry.resistance, 0.0)
+        assertEquals(0.0, entry.avgSpeedMph, 0.0)
+        assertEquals(0, entry.avgRpm)
+        assertEquals(0, entry.avgHeartRateBpm)
+        assertEquals(0, entry.maxHeartRateBpm)
+    }
+
+    @Test
+    fun allLoggingSchemasAndGoalStartRoundTrip() {
+        val store = FitnessStore(
+            plans = listOf(
+                FitnessPlan(id = "plan-load", name = "Lift", activityTypeId = "strength_training", category = "strength", machines = listOf(Machine("m-load", "Bench"))),
+                FitnessPlan(id = "plan-ride", name = "Ride", activityTypeId = "cycling", category = "cardio", machines = listOf(Machine("m-ride", "Bike"))),
+                FitnessPlan(id = "plan-yoga", name = "Flow", activityTypeId = "yoga", category = "mobility_flexibility", machines = listOf(Machine("m-yoga", "Mat"))),
+                FitnessPlan(id = "plan-hiit", name = "HIIT", activityTypeId = "hiit", category = "conditioning", machines = listOf(Machine("m-hiit", "Main"))),
+                FitnessPlan(id = "plan-ball", name = "Pickup", activityTypeId = "basketball", category = "sports", machines = listOf(Machine("m-ball", "Court"))),
+                FitnessPlan(id = "plan-rest", name = "Rest", activityTypeId = "rest_day", category = "recovery", machines = listOf(Machine("m-rest", "Note"))),
+            ),
+            workouts = listOf(
+                Workout("w-load", "2026-10-01", "plan-load", "strength_training", listOf(
+                    WorkoutEntry("e-load", "plan-load", "m-load", schema = "load", weight = 135.0, repetitions = 8),
+                )),
+                Workout("w-ride", "2026-10-02", "plan-ride", "cycling", listOf(
+                    WorkoutEntry("e-ride", "plan-ride", "m-ride", schema = "distance_time", distanceMi = 8.5, durationSec = 1800),
+                )),
+                Workout("w-yoga", "2026-10-03", "plan-yoga", "yoga", listOf(
+                    WorkoutEntry("e-yoga", "plan-yoga", "m-yoga", schema = "duration", durationSec = 2400),
+                )),
+                Workout("w-hiit", "2026-10-04", "plan-hiit", "hiit", listOf(
+                    WorkoutEntry("e-hiit", "plan-hiit", "m-hiit", schema = "interval", rounds = 8, workSec = 20, restSec = 10),
+                )),
+                Workout("w-ball", "2026-10-05", "plan-ball", "basketball", listOf(
+                    WorkoutEntry("e-ball", "plan-ball", "m-ball", schema = "sport", durationSec = 3600, intensity = "moderate"),
+                )),
+                Workout("w-rest", "2026-10-06", "plan-rest", "rest_day", listOf(
+                    WorkoutEntry("e-rest", "plan-rest", "m-rest", schema = "note", note = "Easy walk"),
+                )),
+            ),
+            weightRecords = listOf(WeightRecord("11111111-1111-4111-8111-111111111111", "2026-10-02", "08:15", 180.2)),
+            profile = UserProfile("Ada", "Lovelace", 65, 170.0, 10, "11111111-1111-4111-8111-111111111111"),
+        )
+        val parsed = parseAccountExport(buildAccountExport(store, "sunset", "2026-10-12T12:00:00.000Z"))
+        assertEquals("sunset", parsed.themeId)
+        assertEquals("11111111-1111-4111-8111-111111111111", parsed.data.profile.weightGoalStartId)
+        assertEquals(6, parsed.data.plans.size)
+        assertEquals(6, parsed.data.workouts.size)
+        assertEquals(135.0, parsed.data.workouts.first { it.id == "w-load" }.entries[0].weight)
+        assertEquals(8.5, parsed.data.workouts.first { it.id == "w-ride" }.entries[0].distanceMi)
+        assertEquals(2400, parsed.data.workouts.first { it.id == "w-yoga" }.entries[0].durationSec)
+        assertEquals(8, parsed.data.workouts.first { it.id == "w-hiit" }.entries[0].rounds)
+        assertEquals(20, parsed.data.workouts.first { it.id == "w-hiit" }.entries[0].workSec)
+        assertEquals("moderate", parsed.data.workouts.first { it.id == "w-ball" }.entries[0].intensity)
+        assertEquals("Easy walk", parsed.data.workouts.first { it.id == "w-rest" }.entries[0].note)
+    }
+
+    @Test
+    fun cyclingMetricsRoundTripThroughExport() {
+        val store = FitnessStore(
+            plans = listOf(
+                FitnessPlan(
+                    id = "plan-c",
+                    name = "Ride",
+                    activityTypeId = "cycling",
+                    category = "cardio",
+                    machines = listOf(Machine("machine-c", "Indoor")),
+                ),
+            ),
+            workouts = listOf(
+                Workout(
+                    id = "workout-c",
+                    date = "2026-10-01",
+                    planId = "plan-c",
+                    activityTypeId = "cycling",
+                    entries = listOf(
+                        WorkoutEntry(
+                            id = "entry-c",
+                            planId = "plan-c",
+                            machineId = "machine-c",
+                            schema = "distance_time",
+                            distanceMi = 12.4,
+                            durationSec = 2400,
+                            resistance = 8.0,
+                            avgSpeedMph = 16.5,
+                            avgRpm = 88,
+                            avgHeartRateBpm = 142,
+                            maxHeartRateBpm = 171,
+                        ),
+                    ),
+                ),
+            ),
+            profile = UserProfile("Ada", "Lovelace"),
+        )
+        val parsed = parseAccountExport(buildAccountExport(store, "mint", "2026-10-12T12:00:00.000Z"))
+        val entry = parsed.data.workouts[0].entries[0]
+        assertEquals(8.0, entry.resistance, 0.0)
+        assertEquals(16.5, entry.avgSpeedMph, 0.0)
+        assertEquals(88, entry.avgRpm)
+        assertEquals(142, entry.avgHeartRateBpm)
+        assertEquals(171, entry.maxHeartRateBpm)
+    }
+
+    @Test
     fun acceptsRawTrackingBlob() {
         val data = Json.parseToJsonElement(expoFile).jsonObject["data"]!!.toString()
         val parsed = parseAccountExport(data)

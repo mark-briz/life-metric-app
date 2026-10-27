@@ -1,9 +1,16 @@
 package com.markbriz.lifemetric.domain
 
+import com.markbriz.lifemetric.data.ActivityCatalog
 import com.markbriz.lifemetric.data.BloodPressureReading
+import com.markbriz.lifemetric.data.EntryMetric
+import com.markbriz.lifemetric.data.EntryMetricKind
+import com.markbriz.lifemetric.data.EntryMetrics
+import com.markbriz.lifemetric.data.FitnessPlan
+import com.markbriz.lifemetric.data.Machine
 import com.markbriz.lifemetric.data.WeightRecord
 import com.markbriz.lifemetric.data.Workout
 import com.markbriz.lifemetric.data.WorkoutEntry
+import com.markbriz.lifemetric.data.newId
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
@@ -16,12 +23,41 @@ const val DEFAULT_BP_WINDOW = 10
 const val MIN_BP_WINDOW = 2
 const val MAX_BP_WINDOW = 60
 
-enum class BpStatus(val label: String, val color: Long) {
-    Normal("Normal", 0xFF059669),
-    Elevated("Elevated", 0xFFD97706),
-    Stage1("Stage 1 Hypertension", 0xFFEA580C),
-    Stage2("Stage 2 Hypertension", 0xFFDC2626),
-    Crisis("Hypertensive Crisis", 0xFF991B1B),
+enum class BpStatus(val label: String, val color: Long, val range: String, val description: String) {
+    Normal(
+        "Normal",
+        0xFF059669,
+        "Less than 120 and less than 80",
+        "Systolic less than 120 and diastolic less than 80.",
+    ),
+    Elevated(
+        "Elevated",
+        0xFFD97706,
+        "120–129 and less than 80",
+        "Systolic 120 to 129 and diastolic less than 80.",
+    ),
+    Stage1(
+        "Stage 1 Hypertension",
+        0xFFEA580C,
+        "130–139 or 80–89",
+        "Systolic 130 to 139 or diastolic 80 to 89. Also called high blood pressure.",
+    ),
+    Stage2(
+        "Stage 2 Hypertension",
+        0xFFDC2626,
+        "140 or higher or 90 or higher",
+        "Systolic 140 or higher or diastolic 90 or higher. Also called high blood pressure.",
+    ),
+    Severe(
+        "Severe Hypertension",
+        0xFF991B1B,
+        "Higher than 180 and/or higher than 120",
+        "Systolic higher than 180 and/or diastolic higher than 120. If you do not have symptoms, wait 1 minute, take it again, and call your health care professional if it stays this high. If you have chest pain, shortness of breath, back pain, numbness, weakness, vision changes, or trouble speaking, call 911 — that is a hypertensive emergency.",
+    );
+
+    companion object {
+        val explained = listOf(Normal, Elevated, Stage1, Stage2, Severe)
+    }
 }
 
 enum class BmiCategory(val label: String, val range: String, val color: Long) {
@@ -69,7 +105,7 @@ fun bmiCategory(bmi: Double): BmiCategory? = when {
 }
 
 fun bloodPressureStatus(systolic: Int, diastolic: Int): BpStatus = when {
-    systolic > 180 || diastolic > 120 -> BpStatus.Crisis
+    systolic > 180 || diastolic > 120 -> BpStatus.Severe
     systolic >= 140 || diastolic >= 90 -> BpStatus.Stage2
     (systolic in 130..139) || (diastolic in 80..89) -> BpStatus.Stage1
     systolic in 120..129 && diastolic < 80 -> BpStatus.Elevated
@@ -267,31 +303,76 @@ data class PreviousLoad(
     val repetitions: Int,
 )
 
+fun lastUsedPlanId(workouts: List<Workout>, plans: List<FitnessPlan>): String? {
+    if (plans.isEmpty()) return null
+    val last = workouts.maxWithOrNull(compareBy<Workout> { it.date }.thenBy { it.id })
+    return last?.planId?.takeIf { id -> plans.any { it.id == id } } ?: plans.first().id
+}
+
+fun lastUsedMachineId(workouts: List<Workout>, planId: String, machines: List<Machine>): String? {
+    if (machines.isEmpty()) return null
+    val last = workouts
+        .filter { it.planId == planId && it.entries.isNotEmpty() }
+        .maxWithOrNull(compareBy<Workout> { it.date }.thenBy { it.id })
+    val machineId = last?.entries?.lastOrNull()?.machineId
+    return machineId?.takeIf { id -> machines.any { it.id == id } } ?: machines.first().id
+}
+
+fun formatPreviousLoadSuggestion(load: PreviousLoad): String =
+    "Last time: ${formatLoadWeight(load.weight)} lb × ${load.repetitions}."
+
+fun emptyWorkoutEntry(plan: FitnessPlan): WorkoutEntry {
+    val schema = ActivityCatalog.schema(plan.activityTypeId)
+    val defaults = ActivityCatalog.intervalDefaults(plan.activityTypeId)
+    return WorkoutEntry(
+        id = newId("entry"),
+        planId = plan.id,
+        machineId = plan.machines.firstOrNull()?.id.orEmpty(),
+        schema = schema,
+        weight = if (schema == "load") 0.0 else null,
+        repetitions = if (schema == "load") 0 else null,
+        distanceMi = if (schema == "distance_time") 0.0 else null,
+        durationSec = if (schema == "distance_time" || schema == "duration" || schema == "sport") 0 else null,
+        rounds = if (schema == "interval") defaults.first else null,
+        workSec = if (schema == "interval") defaults.second else null,
+        restSec = if (schema == "interval") defaults.third else null,
+        note = if (schema == "note") "" else null,
+    )
+}
+
+fun activityIdsWithSameName(plans: List<FitnessPlan>, activityId: String): Set<String> {
+    if (activityId.isBlank()) return emptySet()
+    val activities = plans.flatMap { it.machines }
+    val name = activities.find { it.id == activityId }?.name?.trim().orEmpty()
+    if (name.isEmpty()) return setOf(activityId)
+    return activities.filter { it.name.trim().equals(name, ignoreCase = true) }.map { it.id }.toSet()
+}
+
 /**
- * Latest load (weight/reps) for the same plan and activity, matching the Expo app's
- * `findPreviousLoad`. Prefers a later date, then a later set in the same workout.
+ * Latest load (weight/reps) for the most recent set whose activity has the same name.
+ * Prefers a later date, then a later set in the same workout.
  */
 fun findPreviousLoad(
     workouts: List<Workout>,
-    planId: String,
-    machineId: String,
+    plans: List<FitnessPlan>,
+    activityId: String,
     currentWorkoutDate: String,
     currentEntries: List<WorkoutEntry>,
     currentWorkoutId: String? = null,
     excludeEntryId: String? = null,
 ): PreviousLoad? {
-    if (planId.isBlank() || machineId.isBlank()) return null
+    val matchingIds = activityIdsWithSameName(plans, activityId)
+    if (matchingIds.isEmpty()) return null
     data class Candidate(val date: String, val sequence: Int, val weight: Double, val repetitions: Int)
     val candidates = mutableListOf<Candidate>()
     fun consider(entry: WorkoutEntry, date: String, sequence: Int) {
-        if (entry.machineId != machineId || entry.schema != "load") return
+        if (entry.machineId !in matchingIds || entry.schema != "load") return
         if (excludeEntryId != null && entry.id == excludeEntryId) return
         val weight = entry.weight ?: return
         val repetitions = entry.repetitions ?: return
         candidates += Candidate(date, sequence, weight, repetitions)
     }
     workouts.forEach { workout ->
-        if (workout.planId != planId) return@forEach
         if (currentWorkoutId != null && workout.id == currentWorkoutId) return@forEach
         workout.entries.forEachIndexed { index, entry -> consider(entry, workout.date, index) }
     }
@@ -303,49 +384,131 @@ fun findPreviousLoad(
 fun formatLoadWeight(weight: Double): String =
     if (weight == weight.toInt().toDouble()) weight.toInt().toString() else weight.toString()
 
-fun formatWorkoutEntrySummary(entry: WorkoutEntry): String = when (entry.schema) {
-    "load" -> {
-        val reps = entry.repetitions ?: 0
-        val weight = entry.weight ?: 0.0
-        val weightText = if (weight == weight.toInt().toDouble()) weight.toInt().toString() else formatWeight(weight)
-        "$weightText lb · $reps ${if (reps == 1) "rep" else "reps"}"
+fun WorkoutEntry.metricDisplay(metric: EntryMetric): String = when (metric.id) {
+    EntryMetrics.RESISTANCE -> formatLoadWeight(resistance)
+    EntryMetrics.AVG_SPEED -> formatLoadWeight(avgSpeedMph)
+    EntryMetrics.AVG_RPM -> avgRpm.toString()
+    EntryMetrics.AVG_HEART_RATE -> avgHeartRateBpm.toString()
+    EntryMetrics.MAX_HEART_RATE -> maxHeartRateBpm.toString()
+    else -> ""
+}
+
+fun WorkoutEntry.withMetric(id: String, value: Double): WorkoutEntry = when (id) {
+    EntryMetrics.RESISTANCE -> copy(resistance = roundToTenth(value))
+    EntryMetrics.AVG_SPEED -> copy(avgSpeedMph = roundToTenth(value))
+    EntryMetrics.AVG_RPM -> copy(avgRpm = value.toInt())
+    EntryMetrics.AVG_HEART_RATE -> copy(avgHeartRateBpm = value.toInt())
+    EntryMetrics.MAX_HEART_RATE -> copy(maxHeartRateBpm = value.toInt())
+    else -> this
+}
+
+fun parseEntryMetric(metric: EntryMetric, raw: String): Pair<Double?, String?> {
+    val trimmed = raw.trim()
+    if (trimmed.isEmpty()) return 0.0 to null
+    return when (metric.kind) {
+        EntryMetricKind.Decimal -> {
+            val value = trimmed.toDoubleOrNull()
+            when {
+                value == null -> null to "Enter a number."
+                value < 0 -> null to "Must be 0 or greater."
+                else -> roundToTenth(value) to null
+            }
+        }
+        EntryMetricKind.Whole -> {
+            val value = trimmed.toIntOrNull()
+            when {
+                value == null -> null to "Enter a whole number."
+                value < 0 -> null to "Must be 0 or greater."
+                else -> value.toDouble() to null
+            }
+        }
     }
-    "distance_time" -> {
-        val miles = milesLabel(entry.distanceMi ?: 0.0)
-        val clock = formatDurationClock(entry.durationSec ?: 0)
-        val pace = formatPace(entry.distanceMi ?: 0.0, entry.durationSec ?: 0)
-        if (pace.isNotEmpty()) "$miles mi · $clock · $pace" else "$miles mi · $clock"
+}
+
+fun WorkoutEntry.withParsedMetrics(
+    metrics: List<EntryMetric>,
+    values: Map<String, String>,
+): Pair<WorkoutEntry, Map<String, String>> {
+    var next = this
+    val errors = mutableMapOf<String, String>()
+    metrics.forEach { metric ->
+        val (value, error) = parseEntryMetric(metric, values[metric.id].orEmpty())
+        if (error != null) errors[metric.id] = error
+        else if (value != null) next = next.withMetric(metric.id, value)
     }
-    "duration" -> formatDurationLabel(entry.durationSec ?: 0)
-    "sport" -> {
-        val base = formatDurationLabel(entry.durationSec ?: 0)
-        if (entry.intensity.isNullOrBlank()) base else "$base · ${entry.intensity}"
+    return next to errors
+}
+
+fun formatOptionalMetrics(entry: WorkoutEntry): String = listOfNotNull(
+    entry.resistance.takeIf { it > 0 }?.let { "Resistance ${formatLoadWeight(it)}" },
+    entry.avgSpeedMph.takeIf { it > 0 }?.let { "${formatLoadWeight(it)} mph" },
+    entry.avgRpm.takeIf { it > 0 }?.let { "${it} rpm" },
+    entry.avgHeartRateBpm.takeIf { it > 0 }?.let { "avg ${it} bpm" },
+    entry.maxHeartRateBpm.takeIf { it > 0 }?.let { "max ${it} bpm" },
+).joinToString(" · ")
+
+fun formatResistance(value: Double): String? =
+    value.takeIf { it > 0 }?.let { "Resistance ${formatLoadWeight(it)}" }
+
+fun formatResistanceSummary(entries: List<WorkoutEntry>): String? {
+    val values = entries.map { it.resistance }.filter { it > 0 }.distinct().sorted()
+    if (values.isEmpty()) return null
+    if (values.size == 1) return formatResistance(values.first())
+    return "Resistance ${formatLoadWeight(values.first())}–${formatLoadWeight(values.last())}"
+}
+
+fun formatWorkoutEntrySummary(entry: WorkoutEntry): String {
+    val base = when (entry.schema) {
+        "load" -> {
+            val reps = entry.repetitions ?: 0
+            val weight = entry.weight ?: 0.0
+            val weightText = if (weight == weight.toInt().toDouble()) weight.toInt().toString() else formatWeight(weight)
+            "$weightText lb · $reps ${if (reps == 1) "rep" else "reps"}"
+        }
+        "distance_time" -> {
+            val miles = milesLabel(entry.distanceMi ?: 0.0)
+            val clock = formatDurationClock(entry.durationSec ?: 0)
+            val distanceTime = if (clock.isEmpty()) "$miles mi" else "$miles mi · $clock"
+            val resistance = formatResistance(entry.resistance)
+            if (resistance == null) distanceTime else "$resistance · $distanceTime"
+        }
+        "duration" -> formatDurationLabel(entry.durationSec ?: 0)
+        "sport" -> {
+            val label = formatDurationLabel(entry.durationSec ?: 0)
+            if (entry.intensity.isNullOrBlank()) label else "$label · ${entry.intensity}"
+        }
+        "interval" -> {
+            val rounds = entry.rounds ?: 0
+            val parts = listOfNotNull(
+                entry.workSec?.let { "${it}s work" },
+                entry.restSec?.let { "${it}s rest" },
+            )
+            val roundsLabel = "$rounds ${if (rounds == 1) "round" else "rounds"}"
+            if (parts.isEmpty()) roundsLabel else "$roundsLabel · ${parts.joinToString(" · ")}"
+        }
+        "note" -> entry.note?.trim().takeUnless { it.isNullOrEmpty() } ?: "Logged"
+        else -> "Logged"
     }
-    "interval" -> {
-        val rounds = entry.rounds ?: 0
-        val extras = listOfNotNull(
-            entry.workSec?.let { "${it}s work" },
-            entry.restSec?.let { "${it}s rest" },
-        )
-        val roundsLabel = "$rounds ${if (rounds == 1) "round" else "rounds"}"
-        if (extras.isEmpty()) roundsLabel else "$roundsLabel · ${extras.joinToString(" · ")}"
-    }
-    "note" -> entry.note?.trim().takeUnless { it.isNullOrEmpty() } ?: "Logged"
-    else -> "Logged"
+    return base
 }
 
 fun summarizeWorkoutEntries(entries: List<WorkoutEntry>): String {
-    if (entries.isEmpty()) return "0 entries"
+    if (entries.isEmpty()) return "Nothing logged"
     val schemas = entries.map { it.schema }.toSet()
     if (schemas.size == 1) {
         when (entries.first().schema) {
             "distance_time" -> {
                 val miles = entries.sumOf { it.distanceMi ?: 0.0 }
-                return "${milesLabel(miles)} mi"
+                val clock = formatDurationClock(entries.sumOf { it.durationSec ?: 0 })
+                val distanceTime = if (clock.isEmpty()) "${milesLabel(miles)} mi" else "${milesLabel(miles)} mi · $clock"
+                val resistance = formatResistanceSummary(entries)
+                return if (resistance == null) distanceTime else "$resistance · $distanceTime"
             }
             "duration", "sport" -> {
                 val sec = entries.sumOf { it.durationSec ?: 0 }
-                return formatDurationLabel(sec).ifEmpty { "${entries.size} entries" }
+                return formatDurationLabel(sec).ifEmpty {
+                    "${entries.size} ${ActivityCatalog.entryNoun(entries.first().schema, entries.size)}"
+                }
             }
             "interval" -> {
                 val rounds = entries.sumOf { it.rounds ?: 0 }
@@ -356,7 +519,8 @@ fun summarizeWorkoutEntries(entries: List<WorkoutEntry>): String {
             }
         }
     }
-    return "${entries.size} ${if (entries.size == 1) "entry" else "entries"}"
+    val schema = entries.first().schema
+    return "${entries.size} ${ActivityCatalog.entryNoun(schema, entries.size)}"
 }
 
 data class ProfileFormResult(

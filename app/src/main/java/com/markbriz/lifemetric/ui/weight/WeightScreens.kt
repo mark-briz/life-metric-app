@@ -13,11 +13,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Remove
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -26,7 +23,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.input.KeyboardType
@@ -51,10 +47,12 @@ import com.markbriz.lifemetric.ui.components.ConfirmDeleteDialog
 import com.markbriz.lifemetric.ui.components.DateTimeFields
 import com.markbriz.lifemetric.ui.components.EmptyState
 import com.markbriz.lifemetric.ui.components.GhostButton
+import com.markbriz.lifemetric.ui.components.HistoryRow
 import com.markbriz.lifemetric.ui.components.LabeledField
 import com.markbriz.lifemetric.ui.components.PrimaryButton
 import com.markbriz.lifemetric.ui.components.SectionTitle
 import com.markbriz.lifemetric.ui.components.SurfaceCard
+import com.markbriz.lifemetric.ui.components.TextLink
 import com.markbriz.lifemetric.ui.components.WeightChart
 import com.markbriz.lifemetric.ui.theme.LocalAppColors
 
@@ -64,6 +62,8 @@ fun WeightScreen(
     onAdd: () -> Unit,
     onEdit: (String) -> Unit,
     onDelete: (String) -> Unit,
+    onEditHeight: () -> Unit,
+    onEditGoal: () -> Unit,
 ) {
     val colors = LocalAppColors.current
     val latest = latestWeight(store.weightRecords)
@@ -82,9 +82,12 @@ fun WeightScreen(
         onFab = onAdd,
     ) {
         if (latest == null) {
-            EmptyState("No weights recorded", "Record your first scale reading to start the history chart.") {
-                PrimaryButton("Record weight", onClick = onAdd)
-            }
+            EmptyState(
+                "No weights recorded",
+                "Record your first scale reading to start the history chart.",
+                "Record weight",
+                onAdd,
+            )
         } else {
             SurfaceCard {
                 Text("LAST RECORDED WEIGHT", color = colors.inkMuted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.1.sp)
@@ -97,15 +100,18 @@ fun WeightScreen(
             SurfaceCard { WeightChart(chronologicalWeights(store.weightRecords), store.profile.weightGoalLb) }
         }
         SectionTitle("Weight target")
-        WeightTargetSection(store)
+        WeightTargetSection(store, onEditGoal)
         if (latest != null) {
             SectionTitle("Body Mass Index")
-            SurfaceCard {
-                if (height != null) {
-                    BmiGauge(bmi, goalBmi)
-                } else {
-                    EmptyState("Height needed for BMI", "Add your height on the Profile tab so BMI can be calculated from the latest weight.")
-                }
+            if (height != null) {
+                SurfaceCard { BmiGauge(bmi, goalBmi) }
+            } else {
+                EmptyState(
+                    "Height needed for BMI",
+                    "Add your height so BMI can be calculated from the latest weight.",
+                    "Set height",
+                    onEditHeight,
+                )
             }
         }
         if (recent.isNotEmpty()) {
@@ -117,25 +123,14 @@ fun WeightScreen(
             }
             SectionTitle("Recent readings")
             recent.forEach { record ->
-                SurfaceCard {
-                    Text("${formatDate(record.date)} · ${formatTime(record.time)}", color = colors.inkMuted, fontSize = 13.sp)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Row(
-                            Modifier.weight(1f),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        ) {
-                            WeightChangeArrow(record.weight, previousWeightById[record.id])
-                            Text("${formatWeight(record.weight)} lb", color = colors.ink, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                        }
-                        IconButton(onClick = { onEdit(record.id) }) {
-                            Icon(Icons.Default.Edit, contentDescription = "Edit reading", tint = colors.brandDark)
-                        }
-                        IconButton(onClick = { pending = record }) {
-                            Icon(Icons.Default.Delete, contentDescription = "Delete reading", tint = colors.danger)
-                        }
-                    }
-                }
+                HistoryRow(
+                    primary = "${formatWeight(record.weight)} lb",
+                    secondary = "${formatDate(record.date)} · ${formatTime(record.time)}",
+                    onClick = { onEdit(record.id) },
+                    trailing = { WeightChangeArrow(record.weight, previousWeightById[record.id]) },
+                    overflowLabel = "Delete",
+                    onOverflow = { pending = record },
+                )
             }
         }
     }
@@ -157,7 +152,7 @@ private fun WeightChangeArrow(weight: Double, previous: Double?) {
     val (icon, description, tint) = when {
         delta > 0 -> Triple(Icons.Default.ArrowUpward, "Weight increased", colors.danger)
         delta < 0 -> Triple(Icons.Default.ArrowDownward, "Weight decreased", colors.success)
-        else -> Triple(Icons.Default.Remove, "No change", Color.Black)
+        else -> Triple(Icons.Default.Remove, "No change", colors.ink)
     }
     Icon(
         imageVector = icon,
@@ -168,13 +163,15 @@ private fun WeightChangeArrow(weight: Double, previous: Double?) {
 }
 
 @Composable
-private fun WeightTargetSection(store: FitnessStore) {
+private fun WeightTargetSection(store: FitnessStore, onEditGoal: () -> Unit) {
     val colors = LocalAppColors.current
     val startExists = store.weightRecords.any { it.id == store.profile.weightGoalStartId }
     if (!startExists) {
         EmptyState(
             "Add a starting weight goal",
-            "Choose a starting weight under Weight goal on the Profile tab. It must be one of your recorded scale readings.",
+            "Choose a recorded scale reading as the start of this goal.",
+            "Choose starting weight",
+            onEditGoal,
         )
         return
     }
@@ -182,7 +179,9 @@ private fun WeightTargetSection(store: FitnessStore) {
     if (progress == null) {
         EmptyState(
             "Add a target weight",
-            "Set a target weight under Weight goal on the Profile tab to see progress from your starting reading.",
+            "Set a target weight to see progress from your starting reading.",
+            "Set target weight",
+            onEditGoal,
         )
         return
     }
@@ -214,6 +213,7 @@ private fun WeightTargetSection(store: FitnessStore) {
         GoalStatRow("Target to lose", "${formatWeight(progress.targetToLoseLb)} lb")
         HorizontalDivider(color = colors.border)
         GoalStatRow("Weight lost", "${formatWeight(progress.weightLostLb)} lb")
+        TextLink("Change goal", onClick = onEditGoal)
     }
 }
 
@@ -254,10 +254,14 @@ fun WeightFormScreen(
             DateTimeFields(date, time, { date = it }, { time = it })
             Text("Weight (lb)", color = LocalAppColors.current.inkMuted, fontWeight = FontWeight.Medium)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                GhostButton("−", onClick = {
-                    val current = weight.toDoubleOrNull() ?: 0.0
-                    weight = formatWeight(roundToTenth((current - 0.1).coerceAtLeast(0.0)))
-                })
+                GhostButton(
+                    "−",
+                    onClick = {
+                        val current = weight.toDoubleOrNull() ?: 0.0
+                        weight = formatWeight(roundToTenth((current - 0.1).coerceAtLeast(0.0)))
+                    },
+                    contentDescription = "Decrease weight",
+                )
                 LabeledField(
                     label = "lb",
                     value = weight,
@@ -266,10 +270,14 @@ fun WeightFormScreen(
                     error = error,
                     keyboardType = KeyboardType.Decimal,
                 )
-                GhostButton("+", onClick = {
-                    val current = weight.toDoubleOrNull() ?: 0.0
-                    weight = formatWeight(roundToTenth(current + 0.1))
-                })
+                GhostButton(
+                    "+",
+                    onClick = {
+                        val current = weight.toDoubleOrNull() ?: 0.0
+                        weight = formatWeight(roundToTenth(current + 0.1))
+                    },
+                    contentDescription = "Increase weight",
+                )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 GhostButton("Cancel", onBack, Modifier.weight(1f))

@@ -2,12 +2,6 @@ package com.markbriz.lifemetric.ui.bp
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -18,11 +12,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.markbriz.lifemetric.data.BloodPressureReading
 import com.markbriz.lifemetric.data.FitnessStore
+import com.markbriz.lifemetric.domain.BpStatus
 import com.markbriz.lifemetric.domain.bloodPressureStatus
 import com.markbriz.lifemetric.domain.formatDate
 import com.markbriz.lifemetric.domain.formatTime
@@ -36,11 +30,13 @@ import com.markbriz.lifemetric.ui.components.BpBadge
 import com.markbriz.lifemetric.ui.components.ConfirmDeleteDialog
 import com.markbriz.lifemetric.ui.components.EmptyState
 import com.markbriz.lifemetric.ui.components.GhostButton
+import com.markbriz.lifemetric.ui.components.HistoryRow
 import com.markbriz.lifemetric.ui.components.LabeledField
 import com.markbriz.lifemetric.ui.components.PrimaryButton
 import com.markbriz.lifemetric.ui.components.SectionTitle
 import com.markbriz.lifemetric.ui.components.SurfaceCard
 import com.markbriz.lifemetric.ui.components.DateTimeFields
+import com.markbriz.lifemetric.ui.components.TextLink
 import com.markbriz.lifemetric.ui.theme.LocalAppColors
 
 @Composable
@@ -49,6 +45,7 @@ fun BloodPressureScreen(
     onAdd: () -> Unit,
     onEdit: (String) -> Unit,
     onDelete: (String) -> Unit,
+    onEditBpWindow: () -> Unit,
 ) {
     val colors = LocalAppColors.current
     val latest = latestBloodPressure(store.bloodPressureReadings)
@@ -67,17 +64,25 @@ fun BloodPressureScreen(
         onFab = onAdd,
     ) {
         if (latest == null) {
-            EmptyState("No blood pressure readings yet", "Add a reading with date, time, systolic, diastolic, and heart rate.") {
-                PrimaryButton("Add your first reading", onClick = onAdd)
-            }
+            EmptyState(
+                "No blood pressure readings yet",
+                "Add a reading with date, time, systolic, diastolic, and heart rate.",
+                "Add your first reading",
+                onAdd,
+            )
         } else {
             val status = bloodPressureStatus(latest.systolic, latest.diastolic)
             SurfaceCard {
                 Text("MOST RECENT READING", color = colors.inkMuted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.1.sp)
                 Text("${latest.systolic} / ${latest.diastolic} mmHg · ${latest.heartRate} bpm", color = colors.ink, fontSize = 28.sp, fontWeight = FontWeight.ExtraBold)
                 BpBadge(status)
-                if (status.name == "Crisis") {
-                    Text("Seek emergency care if symptoms occur.", color = colors.danger, fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                if (status == BpStatus.Severe) {
+                    Text(
+                        "Wait 1 minute and take it again. Call your health care professional if it stays this high. Call 911 if you have chest pain, shortness of breath, back pain, numbness, weakness, vision changes, or trouble speaking.",
+                        color = colors.danger,
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 13.sp,
+                    )
                 }
                 Text("${formatDate(latest.date)} · ${formatTime(latest.time)}", color = colors.inkMuted)
             }
@@ -90,40 +95,27 @@ fun BloodPressureScreen(
                 } else {
                     Text("Add more readings to see a trend line.", color = colors.inkMuted)
                 }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Average of last ${store.profile.bpMovingAverageReadings} readings",
+                        color = colors.inkMuted,
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 13.sp,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextLink("Change", onClick = onEditBpWindow, contentDescription = "Change blood pressure average window")
+                }
             }
             SectionTitle("Recent readings")
             recent.forEach { reading ->
-                SurfaceCard {
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            "${formatDate(reading.date)} · ${formatTime(reading.time)}",
-                            color = colors.inkMuted,
-                            fontSize = 13.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
-                        BpBadge(bloodPressureStatus(reading.systolic, reading.diastolic), compact = true)
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            "${reading.systolic} / ${reading.diastolic} mmHg · ${reading.heartRate} bpm",
-                            color = colors.ink,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.weight(1f),
-                        )
-                        IconButton(onClick = { onEdit(reading.id) }) {
-                            Icon(Icons.Default.Edit, contentDescription = "Edit reading", tint = colors.brandDark)
-                        }
-                        IconButton(onClick = { pending = reading }) {
-                            Icon(Icons.Default.Delete, contentDescription = "Delete reading", tint = colors.danger)
-                        }
-                    }
-                }
+                HistoryRow(
+                    primary = "${reading.systolic} / ${reading.diastolic} mmHg · ${reading.heartRate} bpm",
+                    secondary = "${formatDate(reading.date)} · ${formatTime(reading.time)}",
+                    onClick = { onEdit(reading.id) },
+                    trailing = { BpBadge(bloodPressureStatus(reading.systolic, reading.diastolic), compact = true) },
+                    overflowLabel = "Delete",
+                    onOverflow = { pending = reading },
+                )
             }
         }
     }

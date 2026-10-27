@@ -1,10 +1,12 @@
 package com.markbriz.lifemetric.ui.welcome
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -23,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -82,10 +85,21 @@ fun WelcomeScreen(onAccept: () -> Unit) {
                     fontSize = 13.sp,
                     lineHeight = 18.sp,
                 )
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .defaultMinSize(minHeight = 48.dp)
+                        .toggleable(
+                            value = accepted,
+                            enabled = disclaimerRead,
+                            role = Role.Checkbox,
+                            onValueChange = { accepted = it },
+                        ),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     Checkbox(
                         checked = accepted,
-                        onCheckedChange = { if (disclaimerRead) accepted = it },
+                        onCheckedChange = null,
                         enabled = disclaimerRead,
                     )
                     Text("I have read and accept the Health and Fitness Disclaimer", color = colors.ink, fontSize = 14.sp)

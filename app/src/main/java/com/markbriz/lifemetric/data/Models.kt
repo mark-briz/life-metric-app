@@ -37,6 +37,12 @@ data class WorkoutEntry(
     val restSec: Int? = null,
     val intensity: String? = null,
     val note: String? = null,
+    /** Optional telemetry any activity type can record. Missing values load as 0. */
+    val resistance: Double = 0.0,
+    val avgSpeedMph: Double = 0.0,
+    val avgRpm: Int = 0,
+    val avgHeartRateBpm: Int = 0,
+    val maxHeartRateBpm: Int = 0,
 )
 
 @Serializable
@@ -94,10 +100,3 @@ data class LocalFile(
     val disclaimerAccepted: Boolean = false,
 )
 
-data class WorkoutDraft(
-    val workoutId: String?,
-    val date: String,
-    val planId: String,
-    val entries: List<WorkoutEntry>,
-    val backToDetail: Boolean,
-)

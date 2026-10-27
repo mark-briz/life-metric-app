@@ -165,6 +165,11 @@ private fun entryObject(entry: WorkoutEntry): JsonObject = buildJsonObject {
         }
         else -> entry.note?.trim()?.takeIf { it.isNotEmpty() }?.let { put("note", it) }
     }
+    put("resistance", roundToTenth(entry.resistance))
+    put("avgSpeedMph", roundToTenth(entry.avgSpeedMph))
+    put("avgRpm", entry.avgRpm)
+    put("avgHeartRateBpm", entry.avgHeartRateBpm)
+    put("maxHeartRateBpm", entry.maxHeartRateBpm)
 }
 
 fun parseAccountExport(raw: String): ParsedAccountExport {
@@ -274,16 +279,26 @@ private fun parseEntry(value: JsonElement, plans: List<FitnessPlan>): WorkoutEnt
     val schema = record["schema"].asString()?.takeIf { it in LOGGING_SCHEMAS }
         ?: plan?.let { ActivityCatalog.schema(it.activityTypeId) }
         ?: "load"
-    val base = WorkoutEntry(id = id, planId = planId, machineId = machineId, schema = schema)
+    val base = WorkoutEntry(
+        id = id,
+        planId = planId,
+        machineId = machineId,
+        schema = schema,
+        resistance = record["resistance"].asNonNegativeDouble(),
+        avgSpeedMph = record["avgSpeedMph"].asNonNegativeDouble(),
+        avgRpm = record["avgRpm"].asNonNegativeInt(),
+        avgHeartRateBpm = record["avgHeartRateBpm"].asNonNegativeInt(),
+        maxHeartRateBpm = record["maxHeartRateBpm"].asNonNegativeInt(),
+    )
     return when (schema) {
         "load" -> {
-            val weight = record["weight"].asDouble() ?: return null
-            val reps = record["repetitions"].asDouble() ?: return null
-            if (weight < 0 || reps < 1) return null
+            val weight = record["weight"].asDouble() ?: 0.0
+            val reps = record["repetitions"].asDouble() ?: 0.0
+            if (weight < 0 || reps < 0) return null
             base.copy(weight = weight, repetitions = reps.toInt())
         }
         "distance_time" -> {
-            val miles = record["distanceMi"].asDouble()?.takeIf { it > 0 } ?: return null
+            val miles = record["distanceMi"].asDouble()?.takeIf { it >= 0 } ?: 0.0
             val sec = durationFrom(record) ?: return null
             base.copy(distanceMi = miles, durationSec = sec)
         }
@@ -295,7 +310,7 @@ private fun parseEntry(value: JsonElement, plans: List<FitnessPlan>): WorkoutEnt
             base.copy(durationSec = sec, intensity = intensity)
         }
         "interval" -> {
-            val rounds = record["rounds"].asWhole()?.takeIf { it >= 1 } ?: return null
+            val rounds = record["rounds"].asWhole()?.takeIf { it >= 0 } ?: 0
             val work = record["workSec"]
             val rest = record["restSec"]
             val workSec = if (work.isPresent()) work.asWhole()?.takeIf { it >= 1 } ?: return null else null
@@ -307,8 +322,8 @@ private fun parseEntry(value: JsonElement, plans: List<FitnessPlan>): WorkoutEnt
 }
 
 private fun durationFrom(record: JsonObject): Int? {
-    val value = record["durationSec"].asDouble() ?: return null
-    if (value <= 0) return null
+    val value = record["durationSec"].asDouble() ?: return 0
+    if (value < 0) return null
     return value.toInt()
 }
 
@@ -459,3 +474,8 @@ private fun JsonElement?.asDouble(): Double? {
 }
 
 private fun JsonElement?.asWhole(): Int? = asDouble()?.takeIf { it == Math.floor(it) }?.toInt()
+
+/** Missing or invalid optional telemetry defaults to 0 so older export files still load. */
+private fun JsonElement?.asNonNegativeDouble(): Double = asDouble()?.takeIf { it >= 0 } ?: 0.0
+
+private fun JsonElement?.asNonNegativeInt(): Int = asDouble()?.takeIf { it >= 0 }?.toInt() ?: 0

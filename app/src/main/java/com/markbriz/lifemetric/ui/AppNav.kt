@@ -14,9 +14,16 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -36,16 +43,19 @@ import com.markbriz.lifemetric.ui.components.GradientBackground
 import com.markbriz.lifemetric.ui.home.HomeScreen
 import com.markbriz.lifemetric.ui.profile.AboutScreen
 import com.markbriz.lifemetric.ui.profile.ActivityFormScreen
+import com.markbriz.lifemetric.ui.profile.BpWindowEditorScreen
 import com.markbriz.lifemetric.ui.profile.DisclaimerScreen
+import com.markbriz.lifemetric.ui.profile.HeightEditorScreen
 import com.markbriz.lifemetric.ui.profile.PlanDetailScreen
 import com.markbriz.lifemetric.ui.profile.PlanFormScreen
 import com.markbriz.lifemetric.ui.profile.PlansScreen
 import com.markbriz.lifemetric.ui.profile.ProfileScreen
+import com.markbriz.lifemetric.ui.profile.ThemeEditorScreen
+import com.markbriz.lifemetric.ui.profile.WeightGoalEditorScreen
 import com.markbriz.lifemetric.ui.theme.LocalAppColors
 import com.markbriz.lifemetric.ui.weight.WeightFormScreen
 import com.markbriz.lifemetric.ui.weight.WeightScreen
 import com.markbriz.lifemetric.ui.welcome.WelcomeScreen
-import com.markbriz.lifemetric.ui.workout.WorkoutDetailScreen
 import com.markbriz.lifemetric.ui.workout.WorkoutEntryFormScreen
 import com.markbriz.lifemetric.ui.workout.WorkoutFormScreen
 import com.markbriz.lifemetric.ui.workout.WorkoutsScreen
@@ -70,6 +80,29 @@ fun LifeMetricApp(viewModel: AppViewModel) {
     val route = backStack?.destination?.route
     val showTabs = route in tabs.map { it.route }
     val colors = LocalAppColors.current
+    val snackbarHostState = remember { SnackbarHostState() }
+    val undo = state.undo
+    val notice = state.notice
+    LaunchedEffect(undo?.token) {
+        val toast = undo ?: return@LaunchedEffect
+        val result = snackbarHostState.showSnackbar(
+            message = toast.message,
+            actionLabel = "Undo",
+            withDismissAction = true,
+            duration = SnackbarDuration.Short,
+        )
+        if (result == SnackbarResult.ActionPerformed) viewModel.undoDelete()
+        else viewModel.dismissUndo(toast.token)
+    }
+    LaunchedEffect(notice?.token, undo?.token) {
+        if (undo != null) return@LaunchedEffect
+        val toast = notice ?: return@LaunchedEffect
+        snackbarHostState.showSnackbar(
+            message = toast.message,
+            duration = SnackbarDuration.Short,
+        )
+        viewModel.dismissNotice(toast.token)
+    }
 
     if (state.booting) {
         GradientBackground {
@@ -87,6 +120,17 @@ fun LifeMetricApp(viewModel: AppViewModel) {
 
     Scaffold(
         containerColor = Color.Transparent,
+        snackbarHost = {
+            SnackbarHost(snackbarHostState) { data ->
+                Snackbar(
+                    snackbarData = data,
+                    containerColor = colors.ink,
+                    contentColor = colors.surface,
+                    actionColor = colors.brand,
+                    dismissActionContentColor = colors.surface,
+                )
+            }
+        },
         bottomBar = {
             if (showTabs) {
                 NavigationBar(containerColor = colors.surface) {
@@ -129,7 +173,22 @@ fun LifeMetricApp(viewModel: AppViewModel) {
                     )
                 }
                 composable("home") {
-                    HomeScreen(state.store, { nav.navigate("bp") }, { nav.navigate("weight") }, { nav.navigate("workouts") })
+                    HomeScreen(
+                        store = state.store,
+                        onOpenBp = { nav.navigate("bp") },
+                        onOpenWeight = { nav.navigate("weight") },
+                        onOpenWorkouts = { nav.navigate("workouts") },
+                        onAddBp = { nav.navigate("bpForm/$NEW") },
+                        onAddWeight = { nav.navigate("weightForm/$NEW") },
+                        onAddWorkout = {
+                            if (state.store.plans.isEmpty()) {
+                                nav.navigate("planForm/$NEW")
+                            } else {
+                                val id = viewModel.startWorkout()
+                                if (id != null) nav.navigate("workoutForm/$id")
+                            }
+                        },
+                    )
                 }
                 composable("bp") {
                     BloodPressureScreen(
@@ -137,6 +196,7 @@ fun LifeMetricApp(viewModel: AppViewModel) {
                         onAdd = { nav.navigate("bpForm/$NEW") },
                         onEdit = { nav.navigate("bpForm/$it") },
                         onDelete = viewModel::deleteBloodPressure,
+                        onEditBpWindow = { nav.navigate("profileBpWindow") },
                     )
                 }
                 composable("bpForm/{id}") { entry ->
@@ -149,6 +209,7 @@ fun LifeMetricApp(viewModel: AppViewModel) {
                         onSave = { date, time, sys, dia, hr ->
                             viewModel.saveBloodPressure(existing?.id, date, time, sys, dia, hr)
                             nav.popBackStack()
+                            viewModel.showSaved()
                         },
                     )
                 }
@@ -158,6 +219,8 @@ fun LifeMetricApp(viewModel: AppViewModel) {
                         onAdd = { nav.navigate("weightForm/$NEW") },
                         onEdit = { nav.navigate("weightForm/$it") },
                         onDelete = viewModel::deleteWeight,
+                        onEditHeight = { nav.navigate("profileHeight") },
+                        onEditGoal = { nav.navigate("profileGoal") },
                     )
                 }
                 composable("weightForm/{id}") { entry ->
@@ -172,6 +235,7 @@ fun LifeMetricApp(viewModel: AppViewModel) {
                         onSave = { date, time, weight ->
                             viewModel.saveWeight(existing?.id, date, time, weight)
                             nav.popBackStack()
+                            viewModel.showSaved()
                         },
                     )
                 }
@@ -179,73 +243,72 @@ fun LifeMetricApp(viewModel: AppViewModel) {
                     WorkoutsScreen(
                         state.store,
                         onAdd = {
-                            viewModel.beginNewWorkout()
-                            nav.navigate("workoutForm/$NEW")
+                            if (state.store.plans.isEmpty()) {
+                                nav.navigate("planForm/$NEW")
+                            } else {
+                                val id = viewModel.startWorkout()
+                                if (id != null) nav.navigate("workoutForm/$id")
+                            }
                         },
-                        onOpen = { nav.navigate("workoutDetail/$it") },
-                        onEdit = {
-                            viewModel.beginEditWorkout(it, backToDetail = false)
-                            nav.navigate("workoutForm/$it")
-                        },
+                        onOpen = { nav.navigate("workoutForm/$it") },
                         onDelete = viewModel::deleteWorkout,
+                        onPlans = { nav.navigate("plans") },
+                        onCreatePlan = { nav.navigate("planForm/$NEW") },
                     )
                 }
-                composable("workoutDetail/{id}") { entry ->
+                composable("workoutForm/{id}") { entry ->
                     val id = entry.arguments?.getString("id")
                     val workout = state.store.workouts.find { it.id == id }
-                    val plan = state.store.plans.find { it.id == workout?.planId }
-                    WorkoutDetailScreen(
-                        workout = workout,
-                        plan = plan,
-                        onBack = { nav.popBackStack() },
-                        onAddEntry = { nav.navigate("workoutEntry/${workout?.id ?: NEW}/$NEW") },
-                        onEditEntry = { item -> nav.navigate("workoutEntry/${workout?.id}/$item.id") },
-                        onDeleteEntry = { item -> if (workout != null) viewModel.deleteWorkoutEntry(workout.id, item.id) },
-                    )
-                }
-                composable("workoutForm/{id}") {
-                    val draft = state.workoutDraft
+                        ?: state.draftWorkout?.takeIf { it.id == id }
                     WorkoutFormScreen(
                         store = state.store,
-                        draft = draft,
-                        missing = draft == null,
-                        onBack = { nav.popBackStack() },
-                        onDate = viewModel::updateDraftDate,
-                        onPlan = viewModel::updateDraftPlan,
-                        onAddEntry = { nav.navigate("workoutEntry/draft/$NEW") },
-                        onEditEntry = { item -> nav.navigate("workoutEntry/draft/${item.id}") },
-                        onRemoveEntry = viewModel::removeDraftEntry,
-                        onSave = {
-                            val error = viewModel.saveDraftWorkout()
-                            if (error == null) nav.popBackStack()
-                            error
+                        workout = workout,
+                        missing = workout == null,
+                        isNew = state.draftWorkout?.id == id,
+                        onBack = {
+                            viewModel.discardEmptyDraft(id)
+                            nav.popBackStack()
                         },
+                        onDone = {
+                            val persisted = workout != null && state.draftWorkout?.id != id
+                            viewModel.discardEmptyDraft(id)
+                            nav.popBackStack()
+                            if (persisted) viewModel.showSaved()
+                        },
+                        onDate = { date -> if (workout != null) viewModel.updateWorkoutDate(workout.id, date) },
+                        onPlan = { planId -> if (workout != null) viewModel.updateWorkoutPlan(workout.id, planId) },
+                        onAddEntry = {
+                            if (workout != null) nav.navigate("workoutEntry/${workout.id}/$NEW")
+                        },
+                        onEditEntry = { item -> nav.navigate("workoutEntry/${workout?.id}/${item.id}") },
+                        onRemoveEntry = { entryId -> if (workout != null) viewModel.deleteWorkoutEntry(workout.id, entryId) },
+                        onPlans = { nav.navigate("plans") },
+                        onCreatePlan = { nav.navigate("planForm/$NEW") },
+                        onAddActivity = { planId -> nav.navigate("activityForm/$planId/$NEW") },
                     )
                 }
                 composable("workoutEntry/{target}/{entryId}") { entry ->
                     val target = entry.arguments?.getString("target").orEmpty()
                     val entryId = entry.arguments?.getString("entryId").orEmpty()
-                    val draft = state.workoutDraft
-                    val fromDraft = target == "draft"
-                    val planId = if (fromDraft) draft?.planId else state.store.workouts.find { it.id == target }?.planId
-                    val plan = state.store.plans.find { it.id == planId }
-                    val existing = when {
-                        entryId == NEW -> null
-                        fromDraft -> draft?.entries?.find { it.id == entryId }
-                        else -> state.store.workouts.find { it.id == target }?.entries?.find { it.id == entryId }
-                    }
+                    val workout = state.store.workouts.find { it.id == target }
+                        ?: state.draftWorkout?.takeIf { it.id == target }
+                    val plan = state.store.plans.find { it.id == workout?.planId }
+                    val isNew = entryId == NEW
+                    val existing = workout?.entries?.find { it.id == entryId }
                     WorkoutEntryFormScreen(
                         plan = plan,
                         existing = existing,
+                        missing = !isNew && existing == null,
+                        plans = state.store.plans,
                         workouts = state.store.workouts,
-                        currentWorkoutId = if (fromDraft) draft?.workoutId else target,
-                        currentWorkoutDate = if (fromDraft) draft?.date.orEmpty() else state.store.workouts.find { it.id == target }?.date.orEmpty(),
-                        currentEntries = if (fromDraft) draft?.entries.orEmpty() else state.store.workouts.find { it.id == target }?.entries.orEmpty(),
+                        currentWorkoutId = target,
+                        currentWorkoutDate = workout?.date.orEmpty(),
+                        currentEntries = workout?.entries.orEmpty(),
                         onBack = { nav.popBackStack() },
                         onSave = { saved ->
-                            if (fromDraft) viewModel.upsertDraftEntry(saved)
-                            else viewModel.upsertSavedEntry(target, saved)
+                            viewModel.upsertSavedEntry(target, saved)
                             nav.popBackStack()
+                            viewModel.showSaved()
                         },
                     )
                 }
@@ -253,9 +316,10 @@ fun LifeMetricApp(viewModel: AppViewModel) {
                     ProfileScreen(
                         store = state.store,
                         themeId = state.themeId,
-                        onPreviewTheme = viewModel::previewTheme,
-                        onRevertTheme = viewModel::revertThemePreview,
-                        onSave = viewModel::saveProfile,
+                        onHeight = { nav.navigate("profileHeight") },
+                        onGoal = { nav.navigate("profileGoal") },
+                        onBpWindow = { nav.navigate("profileBpWindow") },
+                        onTheme = { nav.navigate("profileTheme") },
                         onPlans = { nav.navigate("plans") },
                         exportSnapshot = viewModel::exportSnapshot,
                         onImport = viewModel::importData,
@@ -267,10 +331,49 @@ fun LifeMetricApp(viewModel: AppViewModel) {
                         },
                     )
                 }
+                composable("profileHeight") {
+                    HeightEditorScreen(
+                        store = state.store,
+                        themeId = state.themeId,
+                        onSave = viewModel::saveProfile,
+                        onBack = { nav.popBackStack() },
+                        backLabel = profileEditorBackLabel(nav.previousBackStackEntry?.destination?.route),
+                    )
+                }
+                composable("profileGoal") {
+                    WeightGoalEditorScreen(
+                        store = state.store,
+                        themeId = state.themeId,
+                        onSave = viewModel::saveProfile,
+                        onBack = { nav.popBackStack() },
+                        backLabel = profileEditorBackLabel(nav.previousBackStackEntry?.destination?.route),
+                    )
+                }
+                composable("profileBpWindow") {
+                    BpWindowEditorScreen(
+                        store = state.store,
+                        themeId = state.themeId,
+                        onSave = viewModel::saveProfile,
+                        onBack = { nav.popBackStack() },
+                        backLabel = profileEditorBackLabel(nav.previousBackStackEntry?.destination?.route),
+                    )
+                }
+                composable("profileTheme") {
+                    ThemeEditorScreen(
+                        store = state.store,
+                        themeId = state.themeId,
+                        onSave = viewModel::saveProfile,
+                        onBack = { nav.popBackStack() },
+                        backLabel = profileEditorBackLabel(nav.previousBackStackEntry?.destination?.route),
+                    )
+                }
                 composable("plans") {
+                    val fromWorkout = nav.previousBackStackEntry?.destination?.route
+                        ?.let { it == "workouts" || it.startsWith("workoutForm") } == true
                     PlansScreen(
                         state.store.plans,
                         onBack = { nav.popBackStack() },
+                        backLabel = if (fromWorkout) "Workouts" else "Profile",
                         onAdd = { nav.navigate("planForm/$NEW") },
                         onEdit = { nav.navigate("planForm/$it") },
                         onOpen = { nav.navigate("planDetail/$it") },
@@ -279,13 +382,18 @@ fun LifeMetricApp(viewModel: AppViewModel) {
                 composable("planForm/{id}") { entry ->
                     val id = entry.arguments?.getString("id")
                     val existing = state.store.plans.find { it.id == id }
+                    val previous = nav.previousBackStackEntry?.destination?.route
                     PlanFormScreen(
                         existing = existing,
                         missing = id != NEW && existing == null,
                         onBack = { nav.popBackStack() },
+                        backLabel = if (previous == "workouts" || previous?.startsWith("workoutForm") == true) "Workouts" else "Plans",
                         onSave = { name, description, typeId ->
                             val error = viewModel.savePlan(existing?.id, name, description, typeId)
-                            if (error == null) nav.popBackStack()
+                            if (error == null) {
+                                nav.popBackStack()
+                                viewModel.showSaved()
+                            }
                             error
                         },
                     )
@@ -306,14 +414,19 @@ fun LifeMetricApp(viewModel: AppViewModel) {
                     val machineId = entry.arguments?.getString("machineId")
                     val plan = state.store.plans.find { it.id == planId }
                     val machine = plan?.machines?.find { it.id == machineId }
+                    val previous = nav.previousBackStackEntry?.destination?.route
                     ActivityFormScreen(
                         planMissing = plan == null,
                         activityMissing = machineId != NEW && machine == null,
                         existing = machine,
                         onBack = { nav.popBackStack() },
+                        backLabel = if (previous?.startsWith("workoutForm") == true) "Workout" else "Plan",
                         onSave = { name, description ->
                             val error = if (planId == null) "Plan not found." else viewModel.saveActivity(planId, machine?.id, name, description)
-                            if (error == null) nav.popBackStack()
+                            if (error == null) {
+                                nav.popBackStack()
+                                viewModel.showSaved()
+                            }
                             error
                         },
                     )
@@ -323,4 +436,10 @@ fun LifeMetricApp(viewModel: AppViewModel) {
             }
         }
     }
+}
+
+private fun profileEditorBackLabel(route: String?): String = when (route) {
+    "bp" -> "Blood pressure"
+    "weight" -> "Weight"
+    else -> "Profile"
 }

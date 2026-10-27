@@ -1,11 +1,10 @@
 package com.markbriz.lifemetric.ui.home
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.MonitorHeart
@@ -13,15 +12,19 @@ import androidx.compose.material.icons.filled.Scale
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.markbriz.lifemetric.data.FitnessStore
+import com.markbriz.lifemetric.domain.bloodPressureStatus
 import com.markbriz.lifemetric.domain.calculateBmi
 import com.markbriz.lifemetric.domain.chronologicalWeights
+import com.markbriz.lifemetric.domain.formatDate
 import com.markbriz.lifemetric.domain.formatDelta
 import com.markbriz.lifemetric.domain.formatRelativeDays
+import com.markbriz.lifemetric.domain.formatTime
 import com.markbriz.lifemetric.domain.formatWeight
 import com.markbriz.lifemetric.domain.latestBloodPressure
 import com.markbriz.lifemetric.domain.latestWeight
@@ -31,21 +34,30 @@ import com.markbriz.lifemetric.domain.workoutSessionsByWeek
 import com.markbriz.lifemetric.domain.workoutsInLastDays
 import com.markbriz.lifemetric.ui.components.AppScreen
 import com.markbriz.lifemetric.ui.components.BloodPressureChart
+import com.markbriz.lifemetric.ui.components.BloodPressureZoneChart
 import com.markbriz.lifemetric.ui.components.BmiGauge
 import com.markbriz.lifemetric.ui.components.BpBadge
 import com.markbriz.lifemetric.ui.components.BpGauge
 import com.markbriz.lifemetric.ui.components.EmptyState
+import com.markbriz.lifemetric.ui.components.SectionTitle
+import com.markbriz.lifemetric.ui.components.SettingsRow
 import com.markbriz.lifemetric.ui.components.StatChip
 import com.markbriz.lifemetric.ui.components.SurfaceCard
+import com.markbriz.lifemetric.ui.components.TextLink
 import com.markbriz.lifemetric.ui.components.WeightChart
 import com.markbriz.lifemetric.ui.components.WorkoutBarChart
-import com.markbriz.lifemetric.domain.bloodPressureStatus
-import com.markbriz.lifemetric.domain.formatDate
-import com.markbriz.lifemetric.domain.formatTime
 import com.markbriz.lifemetric.ui.theme.LocalAppColors
 
 @Composable
-fun HomeScreen(store: FitnessStore, onOpenBp: () -> Unit, onOpenWeight: () -> Unit, onOpenWorkouts: () -> Unit) {
+fun HomeScreen(
+    store: FitnessStore,
+    onOpenBp: () -> Unit,
+    onOpenWeight: () -> Unit,
+    onOpenWorkouts: () -> Unit,
+    onAddBp: () -> Unit,
+    onAddWeight: () -> Unit,
+    onAddWorkout: () -> Unit,
+) {
     val colors = LocalAppColors.current
     val latestBp = latestBloodPressure(store.bloodPressureReadings)
     val latestWeight = latestWeight(store.weightRecords)
@@ -63,6 +75,9 @@ fun HomeScreen(store: FitnessStore, onOpenBp: () -> Unit, onOpenWeight: () -> Un
         calculateBmi(store.profile.weightGoalLb, store.profile.heightInches)
     } else Double.NaN
     val weeks = workoutSessionsByWeek(store.workouts, 8)
+    val firstSession = store.bloodPressureReadings.isEmpty() &&
+        store.weightRecords.isEmpty() &&
+        store.workouts.isEmpty()
 
     AppScreen(title = "Dashboard", lead = "Blood pressure, weight, and workouts at a glance.") {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -75,7 +90,16 @@ fun HomeScreen(store: FitnessStore, onOpenBp: () -> Unit, onOpenWeight: () -> Un
             )
             StatChip("Workouts (30d)", sessions.size.toString(), formatRelativeDays(lastWorkout?.date), Modifier.weight(1f))
         }
-        DashSection("Blood pressure", "Gauge + systolic/diastolic trend", onOpenBp, Icons.Default.MonitorHeart) {
+        if (firstSession) {
+            SectionTitle("Get started")
+            SurfaceCard {
+                Text("Record your first readings and a workout so the dashboard can show trends.", color = colors.inkMuted, fontSize = 14.sp, lineHeight = 20.sp)
+            }
+            SettingsRow("Record blood pressure", "Systolic, diastolic, and heart rate.", onAddBp)
+            SettingsRow("Record weight", "Unlocks BMI after you set height.", onAddWeight)
+            SettingsRow("Log a workout", "Starter plans are ready.", onAddWorkout)
+        }
+        DashSection("Blood pressure", "Trend and category chart", onOpenBp, Icons.Default.MonitorHeart, onAddBp, "Add reading") {
             if (latestBp == null) {
                 EmptyState("No BP readings", "Record systolic, diastolic, and heart rate to populate the gauge and chart.")
             } else {
@@ -90,11 +114,12 @@ fun HomeScreen(store: FitnessStore, onOpenBp: () -> Unit, onOpenWeight: () -> Un
                 } else {
                     Text("Add more readings to see a trend line.", color = colors.inkMuted, fontSize = 13.sp)
                 }
+                BloodPressureZoneChart(latestBp.systolic, latestBp.diastolic)
             }
         }
-        DashSection("Weight", "Trend line + BMI gauge", onOpenWeight, Icons.Default.Scale) {
+        DashSection("Weight", "Trend line + BMI gauge", onOpenWeight, Icons.Default.Scale, onAddWeight, "Record weight") {
             if (latestWeight == null) {
-                EmptyState("No weight readings", "Log scale readings to see your trend chart and BMI gauge.")
+                EmptyState("No weight readings", "Record scale readings to see your trend chart and BMI gauge.")
             } else {
                 Text("${formatWeight(latestWeight.weight)} lb", color = colors.ink, fontSize = 36.sp, fontWeight = FontWeight.ExtraBold)
                 if (delta != null) {
@@ -114,7 +139,7 @@ fun HomeScreen(store: FitnessStore, onOpenBp: () -> Unit, onOpenWeight: () -> Un
                 }
             }
         }
-        DashSection("Workouts", "Sessions per week · bar chart", onOpenWorkouts, Icons.Default.FitnessCenter) {
+        DashSection("Workouts", "Sessions per week · bar chart", onOpenWorkouts, Icons.Default.FitnessCenter, onAddWorkout, "Log workout") {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 StatChip("Sessions (30d)", sessions.size.toString(), null, Modifier.weight(1f))
                 StatChip("Sets logged (30d)", sets.toString(), null, Modifier.weight(1f))
@@ -136,16 +161,19 @@ private fun DashSection(
     subtitle: String,
     onClick: () -> Unit,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
+    onLog: () -> Unit,
+    logDescription: String,
     content: @Composable () -> Unit,
 ) {
     val colors = LocalAppColors.current
     SurfaceCard(Modifier.clickable(onClick = onClick)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Icon(icon, contentDescription = null, tint = colors.brand)
-            Column {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Icon(icon, contentDescription = title, tint = colors.brand)
+            Column(Modifier.weight(1f)) {
                 Text(title, color = colors.ink, fontWeight = FontWeight.Bold, fontSize = 18.sp)
                 Text(subtitle, color = colors.inkMuted, fontSize = 13.sp)
             }
+            TextLink("Log", onClick = onLog, contentDescription = logDescription)
         }
         content()
     }

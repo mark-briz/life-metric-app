@@ -10,9 +10,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -25,16 +27,32 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -62,6 +80,7 @@ import com.markbriz.lifemetric.domain.formatBmi
 import com.markbriz.lifemetric.domain.shortDateLabel
 import com.markbriz.lifemetric.domain.trailingMovingAverage
 import com.markbriz.lifemetric.ui.theme.LocalAppColors
+import kotlinx.coroutines.delay
 import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.floor
@@ -101,13 +120,17 @@ fun AppScreen(
         Column(
             Modifier
                 .fillMaxSize()
+                .imePadding()
                 .verticalScroll(rememberScrollState())
-                .padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 28.dp),
+                .padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = if (showFab) 88.dp else 28.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             if (onBack != null) {
                 Row(
-                    Modifier.clickable(onClick = onBack),
+                    Modifier
+                        .defaultMinSize(minHeight = 48.dp)
+                        .clickable(onClick = onBack)
+                        .semantics { contentDescription = "Back to $backLabel" },
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, tint = colors.brandDark)
@@ -115,7 +138,7 @@ fun AppScreen(
                     Text(backLabel, color = colors.brandDark, fontWeight = FontWeight.SemiBold)
                 }
             }
-            Column(Modifier.padding(end = if (showFab) 64.dp else 0.dp)) {
+            Column {
                 if (eyebrow != null) {
                     Text(
                         eyebrow.uppercase(),
@@ -134,18 +157,13 @@ fun AppScreen(
             content()
         }
         if (showFab && onFab != null) {
-            Box(
-                Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 28.dp, end = 16.dp)
-                    .size(52.dp)
-                    .shadow(6.dp, CircleShape)
-                    .clip(CircleShape)
-                    .background(colors.brand)
-                    .clickable(onClick = onFab),
-                contentAlignment = Alignment.Center,
+            FloatingActionButton(
+                onClick = onFab,
+                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 16.dp),
+                containerColor = colors.brand,
+                contentColor = Color.White,
             ) {
-                Icon(Icons.Default.Add, contentDescription = fabLabel, tint = Color.White)
+                Icon(Icons.Default.Add, contentDescription = fabLabel)
             }
         }
     }
@@ -188,18 +206,83 @@ fun PrimaryButton(label: String, onClick: () -> Unit, modifier: Modifier = Modif
 }
 
 @Composable
-fun GhostButton(label: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun GhostButton(
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    contentDescription: String? = null,
+) {
     val colors = LocalAppColors.current
     Box(
         modifier
+            .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
             .height(48.dp)
             .clip(RoundedCornerShape(14.dp))
             .clickable(onClick = onClick)
+            .then(if (contentDescription != null) Modifier.semantics { this.contentDescription = contentDescription } else Modifier)
             .padding(horizontal = 12.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(label, color = colors.brandDark, fontWeight = FontWeight.Bold, fontSize = 18.sp)
     }
+}
+
+@Composable
+fun TextLink(
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    contentDescription: String = label,
+) {
+    val colors = LocalAppColors.current
+    Text(
+        label,
+        color = colors.brandDark,
+        fontWeight = FontWeight.SemiBold,
+        modifier = modifier
+            .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
+            .clickable(onClick = onClick)
+            .semantics {
+                this.contentDescription = contentDescription
+                role = Role.Button
+            },
+    )
+}
+
+class SaveAck {
+    var visible by mutableStateOf(false)
+    var token by mutableLongStateOf(0L)
+
+    fun mark(ok: Boolean) {
+        if (ok) {
+            visible = true
+            token = System.nanoTime()
+        } else {
+            visible = false
+        }
+    }
+}
+
+@Composable
+fun rememberSaveAck(): SaveAck {
+    val ack = remember { SaveAck() }
+    LaunchedEffect(ack.token) {
+        if (ack.token == 0L) return@LaunchedEffect
+        delay(1600)
+        ack.visible = false
+    }
+    return ack
+}
+
+@Composable
+fun SavedHint(visible: Boolean) {
+    if (!visible) return
+    Text(
+        "Saved",
+        color = LocalAppColors.current.success,
+        fontSize = 13.sp,
+        fontWeight = FontWeight.Medium,
+    )
 }
 
 @Composable
@@ -232,49 +315,163 @@ fun EmptyState(title: String, description: String, action: (@Composable () -> Un
 }
 
 @Composable
+fun EmptyState(title: String, description: String, actionLabel: String, onAction: () -> Unit) {
+    EmptyState(title, description) { PrimaryButton(actionLabel, onClick = onAction) }
+}
+
+@Composable
 fun SectionTitle(text: String) {
     Text(text, color = LocalAppColors.current.ink, fontWeight = FontWeight.Bold, fontSize = 18.sp)
 }
 
 @Composable
-fun SettingsRow(title: String, description: String, onClick: () -> Unit) {
+fun SettingsRow(title: String, description: String, onClick: () -> Unit, value: String? = null) {
     val colors = LocalAppColors.current
     Row(
         Modifier
             .fillMaxWidth()
+            .defaultMinSize(minHeight = 48.dp)
             .shadow(1.dp, RoundedCornerShape(18.dp))
             .clip(RoundedCornerShape(18.dp))
             .background(colors.surface)
             .clickable(onClick = onClick)
-            .padding(16.dp),
+            .padding(16.dp)
+            .semantics { role = Role.Button },
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(title, color = colors.ink, fontWeight = FontWeight.Bold, fontSize = 16.sp)
             Text(description, color = colors.inkMuted, fontSize = 13.sp, lineHeight = 18.sp)
         }
+        if (value != null) {
+            Text(
+                value,
+                color = colors.inkMuted,
+                fontWeight = FontWeight.Medium,
+                fontSize = 14.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(end = 4.dp),
+            )
+        }
         Icon(Icons.Default.ChevronRight, contentDescription = null, tint = colors.inkFaint)
     }
 }
 
 @Composable
+fun HistoryRow(
+    primary: String,
+    secondary: String,
+    onClick: () -> Unit,
+    trailing: @Composable (() -> Unit)? = null,
+    overflowLabel: String? = null,
+    onOverflow: (() -> Unit)? = null,
+) {
+    val colors = LocalAppColors.current
+    var menuOpen by remember { mutableStateOf(false) }
+    SurfaceCard(Modifier.clickable(onClick = onClick)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(primary, color = colors.ink, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                Text(secondary, color = colors.inkMuted, fontSize = 13.sp)
+            }
+            if (trailing != null) {
+                Box(Modifier.padding(end = 4.dp)) { trailing() }
+            }
+            if (overflowLabel != null && onOverflow != null) {
+                Box {
+                    IconButton(onClick = { menuOpen = true }) {
+                        Icon(Icons.Default.MoreVert, contentDescription = "More actions for $primary", tint = colors.inkMuted)
+                    }
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text(overflowLabel) },
+                            onClick = {
+                                menuOpen = false
+                                onOverflow()
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun BpBadge(status: BpStatus, compact: Boolean = false) {
+    var showGuide by remember { mutableStateOf(false) }
     val color = Color(status.color)
-    Text(
-        status.label,
-        color = color,
-        fontSize = if (compact) 11.sp else 12.sp,
-        fontWeight = FontWeight.SemiBold,
-        maxLines = 1,
-        softWrap = false,
-        modifier = Modifier
-            .clip(RoundedCornerShape(999.dp))
-            .background(color.copy(alpha = 0.14f))
-            .padding(
-                horizontal = if (compact) 8.dp else 10.dp,
-                vertical = if (compact) 3.dp else 4.dp,
-            ),
+    Box(
+        Modifier
+            .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
+            .clickable { showGuide = true }
+            .semantics {
+                role = Role.Button
+                contentDescription = "${status.label}. Show blood pressure category descriptions."
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            status.label,
+            color = color,
+            fontSize = if (compact) 11.sp else 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            softWrap = false,
+            modifier = Modifier
+                .clip(RoundedCornerShape(999.dp))
+                .background(color.copy(alpha = 0.14f))
+                .padding(
+                    horizontal = if (compact) 8.dp else 10.dp,
+                    vertical = if (compact) 3.dp else 4.dp,
+                ),
+        )
+    }
+    if (showGuide) {
+        BloodPressureCategoriesDialog(selected = status, onDismiss = { showGuide = false })
+    }
+}
+
+@Composable
+fun BloodPressureCategoriesDialog(selected: BpStatus, onDismiss: () -> Unit) {
+    val colors = LocalAppColors.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Blood pressure categories") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "American Heart Association adult categories, as systolic over diastolic in mm Hg. If the two numbers fall in different categories, the reading is classified in the higher one. This is not a diagnosis.",
+                    color = colors.inkMuted,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp,
+                )
+                BpStatus.explained.forEach { category ->
+                    CategoryGuideRow(category, highlighted = category == selected)
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } },
     )
+}
+
+@Composable
+private fun CategoryGuideRow(category: BpStatus, highlighted: Boolean) {
+    val colors = LocalAppColors.current
+    val tint = Color(category.color)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (highlighted) tint.copy(alpha = 0.12f) else Color.Transparent)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text(category.label, color = tint, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+        Text(category.range, color = colors.ink, fontWeight = FontWeight.Medium, fontSize = 13.sp)
+        Text(category.description, color = colors.inkMuted, fontSize = 13.sp, lineHeight = 18.sp)
+    }
 }
 
 @Composable
@@ -333,7 +530,8 @@ fun BpGauge(systolic: Int, diastolic: Int, modifier: Modifier = Modifier) {
         80f to 120f to Color(0xFF22C55E),
         120f to 130f to Color(0xFFEAB308),
         130f to 140f to Color(0xFFF97316),
-        140f to 200f to Color(0xFFEF4444),
+        140f to 180f to Color(0xFFEF4444),
+        180f to 200f to Color(0xFF991B1B),
     )
     Canvas(modifier.fillMaxWidth().height(180.dp)) {
         val stroke = 26.dp.toPx()
@@ -521,7 +719,135 @@ fun BloodPressureChart(readings: List<BloodPressureReading>, all: List<BloodPres
             drawCircle(colors.accent, 4.dp.toPx(), Offset(x(index), y(reading.diastolic.toFloat())))
         }
     }
-    Text("Systolic · diastolic · trailing average", color = colors.inkMuted, fontSize = 12.sp)
+    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+        ChartLegendSwatch(colors.brand, "Systolic")
+        ChartLegendSwatch(colors.accent, "Diastolic")
+        ChartLegendSwatch(colors.brand.copy(alpha = 0.45f), "Average")
+    }
+}
+
+@Composable
+fun BloodPressureZoneChart(systolic: Int, diastolic: Int) {
+    val colors = LocalAppColors.current
+    val status = bloodPressureStatus(systolic, diastolic)
+    Text("Category chart", color = colors.inkMuted, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+    Canvas(
+        Modifier
+            .fillMaxWidth()
+            .height(248.dp)
+            .semantics {
+                contentDescription = "Blood pressure category chart. Latest reading $systolic over $diastolic is ${status.label}."
+            },
+    ) {
+        val padL = 56.dp.toPx()
+        val padR = 8.dp.toPx()
+        val padT = 8.dp.toPx()
+        val padB = 34.dp.toPx()
+        val xMin = 40f
+        val xMax = 130f
+        val yMin = 70f
+        val yMax = 200f
+        val plotW = (size.width - padL - padR).coerceAtLeast(1f)
+        val plotH = (size.height - padT - padB).coerceAtLeast(1f)
+        fun xOf(dia: Float) = padL + ((dia.coerceIn(xMin, xMax) - xMin) / (xMax - xMin)) * plotW
+        fun yOf(sys: Float) = padT + ((yMax - sys.coerceIn(yMin, yMax)) / (yMax - yMin)) * plotH
+        fun zone(dia0: Float, dia1: Float, sys0: Float, sys1: Float, color: Color) {
+            val left = xOf(dia0)
+            val top = yOf(sys1)
+            drawRect(
+                color = color,
+                topLeft = Offset(left, top),
+                size = Size((xOf(dia1) - left).coerceAtLeast(1f), (yOf(sys0) - top).coerceAtLeast(1f)),
+            )
+        }
+        zone(xMin, xMax, yMin, yMax, Color(0xFFEF4444))
+        zone(40f, 90f, 70f, 140f, Color(0xFFF9A8D4))
+        zone(40f, 80f, 70f, 130f, Color(0xFFFACC15))
+        zone(40f, 80f, 70f, 120f, Color(0xFF4ADE80))
+        zone(40f, 80f, 120f, 130f, Color(0xFFFACC15))
+        drawRect(
+            color = colors.ink,
+            topLeft = Offset(xOf(xMin), yOf(yMax)),
+            size = Size(plotW, plotH),
+            style = Stroke(1.5.dp.toPx()),
+        )
+        val mark = Offset(xOf(diastolic.toFloat()), yOf(systolic.toFloat()))
+        val dash = PathEffect.dashPathEffect(floatArrayOf(8.dp.toPx(), 5.dp.toPx()))
+        drawLine(
+            color = colors.ink,
+            start = Offset(mark.x, yOf(yMax)),
+            end = Offset(mark.x, yOf(yMin)),
+            strokeWidth = 1.5.dp.toPx(),
+            pathEffect = dash,
+        )
+        drawLine(
+            color = colors.ink,
+            start = Offset(xOf(xMin), mark.y),
+            end = Offset(xOf(xMax), mark.y),
+            strokeWidth = 1.5.dp.toPx(),
+            pathEffect = dash,
+        )
+        drawCircle(Color.White, 7.dp.toPx(), mark)
+        drawCircle(colors.ink, 4.5.dp.toPx(), mark)
+        drawIntoCanvas { canvas ->
+            val native = canvas.nativeCanvas
+            val axis = android.graphics.Paint().apply {
+                isAntiAlias = true
+                color = colors.inkMuted.toArgb()
+                textSize = 10.sp.toPx()
+            }
+            val metrics = axis.fontMetrics
+            axis.textAlign = android.graphics.Paint.Align.RIGHT
+            listOf(70, 90, 110, 130, 150).forEach { tick ->
+                val tickY = yOf(tick.toFloat()) - (metrics.ascent + metrics.descent) / 2f
+                native.drawText(tick.toString(), padL - 6.dp.toPx(), tickY, axis)
+            }
+            native.drawText("180+", padL - 6.dp.toPx(), yOf(180f) - (metrics.ascent + metrics.descent) / 2f, axis)
+            val xBaseline = size.height - 4.dp.toPx()
+            listOf(40 to "40", 60 to "60", 80 to "80", 90 to "90", 120 to "120+").forEach { (tick, label) ->
+                axis.textAlign = when (tick) {
+                    40 -> android.graphics.Paint.Align.LEFT
+                    120 -> android.graphics.Paint.Align.RIGHT
+                    else -> android.graphics.Paint.Align.CENTER
+                }
+                native.drawText(label, xOf(tick.toFloat()), xBaseline, axis)
+            }
+            axis.textAlign = android.graphics.Paint.Align.CENTER
+            native.save()
+            native.rotate(-90f, 12.dp.toPx(), padT + plotH / 2f)
+            native.drawText("Systolic", 12.dp.toPx(), padT + plotH / 2f, axis)
+            native.restore()
+            val zonePaint = android.graphics.Paint().apply {
+                isAntiAlias = true
+                textAlign = android.graphics.Paint.Align.CENTER
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+            }
+            fun zoneLabel(text: String, dia: Float, sys: Float, color: Color, sizeSp: Float) {
+                zonePaint.color = color.toArgb()
+                zonePaint.textSize = sizeSp.sp.toPx()
+                val font = zonePaint.fontMetrics
+                native.drawText(text, xOf(dia), yOf(sys) - (font.ascent + font.descent) / 2f, zonePaint)
+            }
+            zoneLabel("Normal", 60f, 95f, Color(0xFF14532D), 12f)
+            zoneLabel("Elevated", 60f, 125f, Color(0xFF713F12), 9f)
+            zoneLabel("Stage 1 Hypertension", 65f, 137f, Color(0xFF9F1239), 10f)
+            zoneLabel("Stage 2 Hypertension", 104f, 158f, Color.White, 11f)
+        }
+    }
+    Text(
+        "Diastolic · latest reading ${systolic}/${diastolic}",
+        color = colors.inkMuted,
+        fontSize = 12.sp,
+    )
+}
+
+@Composable
+private fun ChartLegendSwatch(color: Color, label: String) {
+    val colors = LocalAppColors.current
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Box(Modifier.size(10.dp).clip(CircleShape).background(color))
+        Text(label, color = colors.inkMuted, fontSize = 12.sp)
+    }
 }
 
 @Composable
@@ -602,23 +928,44 @@ fun WeightChart(records: List<WeightRecord>, goal: Double?) {
 @Composable
 fun WorkoutBarChart(data: List<WeekBucket>) {
     val colors = LocalAppColors.current
+    Text("Sessions", color = colors.inkMuted, fontSize = 12.sp)
     Canvas(Modifier.fillMaxWidth().height(160.dp)) {
         val maxCount = data.maxOf { it.count }.coerceAtLeast(1)
+        val padL = 22.dp.toPx()
         val gap = 8.dp.toPx()
-        val barWidth = ((size.width - gap * (data.size - 1)) / data.size).coerceAtLeast(4f)
+        val plotWidth = (size.width - padL).coerceAtLeast(1f)
+        val barWidth = ((plotWidth - gap * (data.size - 1)) / data.size).coerceAtLeast(4f)
         val innerHeight = size.height - 8.dp.toPx()
+        fun barX(index: Int) = padL + index * (barWidth + gap)
+        val yTicks = listOf(0, maxCount)
+        yTicks.forEach { tick ->
+            val tickY = size.height - (tick.toFloat() / maxCount) * innerHeight
+            drawLine(colors.border, Offset(padL, tickY), Offset(size.width, tickY), 1.dp.toPx())
+        }
+        drawIntoCanvas { canvas ->
+            val paint = android.graphics.Paint().apply {
+                isAntiAlias = true
+                color = colors.inkMuted.toArgb()
+                textAlign = android.graphics.Paint.Align.RIGHT
+                textSize = 11.sp.toPx()
+            }
+            val metrics = paint.fontMetrics
+            yTicks.forEach { tick ->
+                val tickY = size.height - (tick.toFloat() / maxCount) * innerHeight - (metrics.ascent + metrics.descent) / 2f
+                canvas.nativeCanvas.drawText(tick.toString(), padL - 6.dp.toPx(), tickY, paint)
+            }
+        }
         data.forEachIndexed { index, bucket ->
             val barHeight = (bucket.count.toFloat() / maxCount) * innerHeight
-            val x = index * (barWidth + gap)
             drawRoundRect(
                 color = if (bucket.count == 0) colors.border else colors.brand,
-                topLeft = Offset(x, size.height - barHeight),
+                topLeft = Offset(barX(index), size.height - barHeight),
                 size = Size(barWidth, barHeight.coerceAtLeast(if (bucket.count == 0) 2f else 6f)),
                 cornerRadius = androidx.compose.ui.geometry.CornerRadius(8f, 8f),
             )
         }
     }
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+    Row(Modifier.fillMaxWidth().padding(start = 22.dp), horizontalArrangement = Arrangement.SpaceBetween) {
         data.forEach { bucket ->
             Text(bucket.label, color = colors.inkFaint, fontSize = 9.sp, modifier = Modifier.weight(1f), textAlign = TextAlign.Center, maxLines = 1)
         }

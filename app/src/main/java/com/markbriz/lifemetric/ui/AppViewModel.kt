@@ -10,12 +10,12 @@ import com.markbriz.lifemetric.data.LocalRepository
 import com.markbriz.lifemetric.data.Machine
 import com.markbriz.lifemetric.data.WeightRecord
 import com.markbriz.lifemetric.data.Workout
-import com.markbriz.lifemetric.data.WorkoutDraft
 import com.markbriz.lifemetric.data.WorkoutEntry
 import com.markbriz.lifemetric.data.newId
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.markbriz.lifemetric.domain.clampBpWindow
+import com.markbriz.lifemetric.domain.lastUsedPlanId
 import com.markbriz.lifemetric.domain.nowTime
 import com.markbriz.lifemetric.domain.roundToTenth
 import com.markbriz.lifemetric.domain.todayIso
@@ -31,6 +31,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
+data class UndoToast(val message: String, val token: Long = System.nanoTime())
+
 data class AppUiState(
     val booting: Boolean = true,
     /** False until the one-time health disclaimer has been accepted on this device. */
@@ -38,14 +40,24 @@ data class AppUiState(
     val store: FitnessStore = FitnessStore(),
     val themeId: String = "mint",
     val savedThemeId: String = "mint",
-    val workoutDraft: WorkoutDraft? = null,
+    /** In-memory session started from Log workout; not written until the first saved entry. */
+    val draftWorkout: Workout? = null,
+    val undo: UndoToast? = null,
+    val notice: UndoToast? = null,
 )
+
+private sealed class DeletedRecord {
+    data class BloodPressure(val reading: BloodPressureReading) : DeletedRecord()
+    data class Weight(val record: WeightRecord, val clearedStart: Boolean) : DeletedRecord()
+    data class Session(val workout: Workout) : DeletedRecord()
+}
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val repo = LocalRepository(app)
     private val mutex = Mutex()
     private val _state = MutableStateFlow(AppUiState())
     val state: StateFlow<AppUiState> = _state.asStateFlow()
+    private var lastDeleted: DeletedRecord? = null
 
     init {
         viewModelScope.launch {
@@ -70,18 +82,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun eraseAllData() {
         viewModelScope.launch {
             mutex.withLock {
+                lastDeleted = null
                 val file = withContext(Dispatchers.IO) { repo.eraseAll() }
                 _state.value = stateFrom(file, booting = false)
             }
         }
-    }
-
-    fun previewTheme(themeId: String) {
-        _state.update { it.copy(themeId = themeId) }
-    }
-
-    fun revertThemePreview() {
-        _state.update { it.copy(themeId = it.savedThemeId) }
     }
 
     fun saveProfile(
@@ -93,7 +98,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         weightGoalStartId: String?,
     ): String? {
         val result = validateProfile(heightFeet, heightInches, weightGoalText, bpWindow)
-        if (!result.ok) return result.heightFeetError ?: result.heightInchesError ?: result.weightGoalError ?: result.bpError
+        val heightOk = result.heightFeetError == null && result.heightInchesError == null
+        val goalOk = result.weightGoalError == null
+        val bpOk = result.bpError == null
         val startId = weightGoalStartId?.takeIf { id -> _state.value.store.weightRecords.any { it.id == id } }
         _state.update {
             it.copy(
@@ -102,9 +109,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 store = it.store.copy(
                     themeId = themeId,
                     profile = it.store.profile.copy(
-                        heightInches = result.heightInches,
-                        weightGoalLb = result.weightGoalLb,
-                        bpMovingAverageReadings = clampBpWindow(result.bpMovingAverageReadings),
+                        heightInches = if (heightOk) result.heightInches else it.store.profile.heightInches,
+                        weightGoalLb = if (goalOk) result.weightGoalLb else it.store.profile.weightGoalLb,
+                        bpMovingAverageReadings = if (bpOk) clampBpWindow(result.bpMovingAverageReadings) else it.store.profile.bpMovingAverageReadings,
                         weightGoalStartId = startId,
                     ),
                 ),
@@ -112,16 +119,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
         mutate { store ->
             store.copy(
+                themeId = themeId,
                 profile = store.profile.copy(
-                    heightInches = result.heightInches,
-                    weightGoalLb = result.weightGoalLb,
-                    bpMovingAverageReadings = clampBpWindow(result.bpMovingAverageReadings),
+                    heightInches = if (heightOk) result.heightInches else store.profile.heightInches,
+                    weightGoalLb = if (goalOk) result.weightGoalLb else store.profile.weightGoalLb,
+                    bpMovingAverageReadings = if (bpOk) clampBpWindow(result.bpMovingAverageReadings) else store.profile.bpMovingAverageReadings,
                     weightGoalStartId = startId?.takeIf { id -> store.weightRecords.any { it.id == id } },
                 ),
-                themeId = themeId,
             )
         }
-        return null
+        return result.heightFeetError ?: result.heightInchesError ?: result.weightGoalError ?: result.bpError
     }
 
     fun savePlan(planId: String?, name: String, description: String, activityTypeId: String): String? {
@@ -186,121 +193,88 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun beginNewWorkout() {
-        val plans = _state.value.store.plans
-        _state.update {
-            it.copy(
-                workoutDraft = WorkoutDraft(
-                    workoutId = null,
-                    date = todayIso(),
-                    planId = plans.firstOrNull()?.id.orEmpty(),
-                    entries = emptyList(),
-                    backToDetail = false,
-                ),
-            )
-        }
+    /** Starts an in-memory session. Returns its id, or null if no plan exists. */
+    fun startWorkout(): String? {
+        val store = _state.value.store
+        val planId = lastUsedPlanId(store.workouts, store.plans) ?: return null
+        val plan = store.plans.find { it.id == planId } ?: return null
+        val workout = Workout(
+            id = newId("workout"),
+            date = todayIso(),
+            planId = plan.id,
+            activityTypeId = plan.activityTypeId,
+            entries = emptyList(),
+        )
+        _state.update { it.copy(draftWorkout = workout) }
+        return workout.id
     }
 
-    fun beginEditWorkout(workoutId: String, backToDetail: Boolean) {
-        val workout = _state.value.store.workouts.find { it.id == workoutId } ?: return
-        _state.update {
-            it.copy(
-                workoutDraft = WorkoutDraft(
-                    workoutId = workout.id,
-                    date = workout.date,
-                    planId = workout.planId,
-                    entries = workout.entries,
-                    backToDetail = backToDetail,
-                ),
-            )
-        }
+    /** Drops an unused draft so backing out of Log workout does not leave an empty session. */
+    fun discardEmptyDraft(workoutId: String?) {
+        val draft = _state.value.draftWorkout ?: return
+        if (workoutId != null && draft.id != workoutId) return
+        if (draft.entries.isEmpty()) _state.update { it.copy(draftWorkout = null) }
     }
 
-    fun updateDraftDate(date: String) {
-        _state.update { state ->
-            val draft = state.workoutDraft ?: return@update state
-            state.copy(workoutDraft = draft.copy(date = date))
-        }
+    fun updateWorkoutDate(workoutId: String, date: String) {
+        if (updateDraft(workoutId) { it.copy(date = date) }) return
+        replaceWorkout(workoutId) { it.copy(date = date) }
     }
 
-    fun updateDraftPlan(planId: String) {
-        _state.update { state ->
-            val draft = state.workoutDraft ?: return@update state
-            val entries = if (planId == draft.planId) draft.entries else emptyList()
-            state.copy(workoutDraft = draft.copy(planId = planId, entries = entries))
+    fun updateWorkoutPlan(workoutId: String, planId: String) {
+        val plan = _state.value.store.plans.find { it.id == planId } ?: return
+        val apply = { workout: Workout ->
+            if (workout.planId == planId) workout
+            else workout.copy(planId = plan.id, activityTypeId = plan.activityTypeId, entries = emptyList())
         }
-    }
-
-    fun upsertDraftEntry(entry: WorkoutEntry) {
-        _state.update { state ->
-            val draft = state.workoutDraft ?: return@update state
-            val entries = draft.entries.toMutableList()
-            val index = entries.indexOfFirst { it.id == entry.id }
-            if (index >= 0) entries[index] = entry else entries += entry
-            state.copy(workoutDraft = draft.copy(entries = entries))
-        }
-    }
-
-    fun removeDraftEntry(entryId: String) {
-        _state.update { state ->
-            val draft = state.workoutDraft ?: return@update state
-            state.copy(workoutDraft = draft.copy(entries = draft.entries.filterNot { it.id == entryId }))
-        }
-    }
-
-    fun saveDraftWorkout(): String? {
-        val draft = _state.value.workoutDraft ?: return "Workout not found."
-        if (draft.date.isBlank()) return "Date is required."
-        val plan = _state.value.store.plans.find { it.id == draft.planId } ?: return "Select a workout plan."
-        if (draft.entries.isEmpty()) return "Add at least one workout entry before saving."
-        mutate { store ->
-            val workouts = store.workouts.toMutableList()
-            val workout = Workout(
-                id = draft.workoutId ?: newId("workout"),
-                date = draft.date,
-                planId = plan.id,
-                activityTypeId = plan.activityTypeId,
-                entries = draft.entries,
-            )
-            val index = workouts.indexOfFirst { it.id == workout.id }
-            if (index >= 0) workouts[index] = workout else workouts += workout
-            store.copy(workouts = workouts)
-        }
-        _state.update { it.copy(workoutDraft = null) }
-        return null
+        if (updateDraft(workoutId, apply)) return
+        replaceWorkout(workoutId, apply)
     }
 
     fun deleteWorkout(workoutId: String) {
-        mutate { store ->
-            store.copy(workouts = store.workouts.filterNot { it.id == workoutId })
+        if (_state.value.draftWorkout?.id == workoutId) {
+            _state.update { it.copy(draftWorkout = null) }
+            return
         }
+        val workout = _state.value.store.workouts.find { it.id == workoutId } ?: return
+        offerUndo(DeletedRecord.Session(workout), "Workout deleted")
+        replaceWorkouts { workouts -> workouts.filterNot { it.id == workoutId } }
     }
 
     fun upsertSavedEntry(workoutId: String, entry: WorkoutEntry) {
-        mutate { store ->
-            store.copy(
-                workouts = store.workouts.map { workout ->
-                    if (workout.id != workoutId) workout
-                    else {
-                        val entries = workout.entries.toMutableList()
-                        val index = entries.indexOfFirst { it.id == entry.id }
-                        if (index >= 0) entries[index] = entry else entries += entry
-                        workout.copy(entries = entries)
-                    }
-                },
-            )
+        val saved = if (entry.id.isBlank()) entry.copy(id = newId("entry")) else entry
+        val draft = _state.value.draftWorkout
+        if (draft != null && draft.id == workoutId) {
+            val committed = draft.withEntry(saved)
+            _state.update { it.copy(draftWorkout = null) }
+            replaceWorkouts { workouts -> workouts.filterNot { it.id == committed.id } + committed }
+            return
         }
+        replaceWorkout(workoutId) { it.withEntry(saved) }
     }
 
     fun deleteWorkoutEntry(workoutId: String, entryId: String) {
-        mutate { store ->
-            store.copy(
-                workouts = store.workouts.map { workout ->
-                    if (workout.id != workoutId) workout
-                    else workout.copy(entries = workout.entries.filterNot { it.id == entryId })
-                },
-            )
+        if (updateDraft(workoutId) { workout ->
+                workout.copy(entries = workout.entries.filterNot { it.id == entryId })
+            }
+        ) return
+        replaceWorkout(workoutId) { workout ->
+            workout.copy(entries = workout.entries.filterNot { it.id == entryId })
         }
+    }
+
+    private fun updateDraft(workoutId: String, transform: (Workout) -> Workout): Boolean {
+        val draft = _state.value.draftWorkout ?: return false
+        if (draft.id != workoutId) return false
+        _state.update { it.copy(draftWorkout = transform(draft)) }
+        return true
+    }
+
+    private fun Workout.withEntry(entry: WorkoutEntry): Workout {
+        val entries = entries.toMutableList()
+        val index = entries.indexOfFirst { it.id == entry.id }
+        if (index >= 0) entries[index] = entry else entries += entry
+        return copy(entries = entries)
     }
 
     fun saveBloodPressure(
@@ -328,6 +302,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun deleteBloodPressure(id: String) {
+        val reading = _state.value.store.bloodPressureReadings.find { it.id == id } ?: return
+        offerUndo(DeletedRecord.BloodPressure(reading), "Reading deleted")
         mutate { store ->
             store.copy(bloodPressureReadings = store.bloodPressureReadings.filterNot { it.id == id })
         }
@@ -349,6 +325,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun deleteWeight(id: String) {
+        val record = _state.value.store.weightRecords.find { it.id == id } ?: return
+        val clearedStart = _state.value.store.profile.weightGoalStartId == id
+        offerUndo(DeletedRecord.Weight(record, clearedStart), "Reading deleted")
         mutate { store ->
             val profile = if (store.profile.weightGoalStartId == id) {
                 store.profile.copy(weightGoalStartId = null)
@@ -360,6 +339,55 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 profile = profile,
             )
         }
+    }
+
+    fun undoDelete() {
+        val item = lastDeleted ?: return
+        lastDeleted = null
+        _state.update { it.copy(undo = null) }
+        when (item) {
+            is DeletedRecord.BloodPressure -> mutate { store ->
+                if (store.bloodPressureReadings.any { it.id == item.reading.id }) store
+                else store.copy(bloodPressureReadings = store.bloodPressureReadings + item.reading)
+            }
+            is DeletedRecord.Weight -> mutate { store ->
+                val records = if (store.weightRecords.any { it.id == item.record.id }) {
+                    store.weightRecords
+                } else {
+                    store.weightRecords + item.record
+                }
+                val profile = if (item.clearedStart) {
+                    store.profile.copy(weightGoalStartId = item.record.id)
+                } else {
+                    store.profile
+                }
+                store.copy(weightRecords = records, profile = profile)
+            }
+            is DeletedRecord.Session -> replaceWorkouts { workouts ->
+                if (workouts.any { it.id == item.workout.id }) workouts else workouts + item.workout
+            }
+        }
+    }
+
+    fun dismissUndo(token: Long? = null) {
+        if (token != null && _state.value.undo?.token != token) return
+        lastDeleted = null
+        _state.update { it.copy(undo = null) }
+    }
+
+    fun showSaved() {
+        if (_state.value.undo != null) return
+        _state.update { it.copy(notice = UndoToast("Saved")) }
+    }
+
+    fun dismissNotice(token: Long? = null) {
+        if (token != null && _state.value.notice?.token != token) return
+        _state.update { it.copy(notice = null) }
+    }
+
+    private fun offerUndo(record: DeletedRecord, message: String) {
+        lastDeleted = record
+        _state.update { it.copy(undo = UndoToast(message), notice = null) }
     }
 
     /** Snapshot of the tracking data plus saved theme, for export. */
@@ -376,18 +404,32 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     withContext(Dispatchers.IO) { repo.mutate { data.copy(themeId = themeId) } }
                 }
                 result.onSuccess { updated ->
+                    lastDeleted = null
                     _state.update {
                         it.copy(
                             store = updated.store,
                             themeId = updated.store.themeId,
                             savedThemeId = updated.store.themeId,
-                            workoutDraft = null,
+                            draftWorkout = null,
+                            undo = null,
+                            notice = null,
                         )
                     }
                     onDone(null)
                 }.onFailure { onDone(it.message ?: "Unable to load this file.") }
             }
         }
+    }
+
+    private fun replaceWorkout(workoutId: String, transform: (Workout) -> Workout) {
+        replaceWorkouts { workouts ->
+            workouts.map { workout -> if (workout.id == workoutId) transform(workout) else workout }
+        }
+    }
+
+    private fun replaceWorkouts(transform: (List<Workout>) -> List<Workout>) {
+        _state.update { it.copy(store = it.store.copy(workouts = transform(it.store.workouts))) }
+        mutate { store -> store.copy(workouts = transform(store.workouts)) }
     }
 
     private fun mutate(transform: (FitnessStore) -> FitnessStore) {
