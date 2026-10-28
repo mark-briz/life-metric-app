@@ -43,6 +43,12 @@ data class WorkoutEntry(
     val avgRpm: Int = 0,
     val avgHeartRateBpm: Int = 0,
     val maxHeartRateBpm: Int = 0,
+    /** warmup | working | drop | failure. Missing values load as working. */
+    val setKind: String = "working",
+    /** Optional Borg-style 1–10. */
+    val rpe: Int? = null,
+    /** Actual rest after this set, not the interval prescription. */
+    val restSecTaken: Int? = null,
 )
 
 @Serializable
@@ -52,6 +58,10 @@ data class Workout(
     val planId: String,
     val activityTypeId: String,
     val entries: List<WorkoutEntry> = emptyList(),
+    /** Optional elapsed session time. Date-only rows stay valid without it. */
+    val durationSec: Int? = null,
+    /** Optional one-line session context. */
+    val note: String = "",
 )
 
 @Serializable
@@ -107,6 +117,10 @@ data class UserProfile(
     val weightMorningReminderTime: String = "07:00",
     val weightDisplayKg: Boolean = false,
     val waistInches: Double? = null,
+    val workoutMorningReminder: Boolean = false,
+    val workoutMorningReminderTime: String = "07:00",
+    /** 0 means the rest timer is off. */
+    val workoutRestTimerSec: Int = 0,
 )
 
 @Serializable

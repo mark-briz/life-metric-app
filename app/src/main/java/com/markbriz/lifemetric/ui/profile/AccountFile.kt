@@ -34,6 +34,31 @@ fun shareBloodPressureReport(context: Context, report: String, csv: String, now:
     )
 }
 
+fun shareWorkoutReport(context: Context, report: String, csv: String, now: LocalDateTime = LocalDateTime.now()) {
+    val dir = File(context.cacheDir, "exports").apply { mkdirs() }
+    val stamp = accountExportFilename(now).removePrefix("life-metric-").removeSuffix(".json")
+    val textFile = File(dir, "life-metric-workout-$stamp.txt")
+    val csvFile = File(dir, "life-metric-workout-$stamp.csv")
+    textFile.writeText(report)
+    csvFile.writeText(csv)
+    val textUri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", textFile)
+    val csvUri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", csvFile)
+    val send = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+        type = "text/*"
+        putParcelableArrayListExtra(Intent.EXTRA_STREAM, arrayListOf(textUri, csvUri))
+        putExtra(Intent.EXTRA_SUBJECT, "Workout log")
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        clipData = android.content.ClipData.newUri(context.contentResolver, textFile.name, textUri).apply {
+            addItem(android.content.ClipData.Item(csvUri))
+        }
+    }
+    context.startActivity(
+        Intent.createChooser(send, "Share workout log").apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        },
+    )
+}
+
 fun shareWeightReport(context: Context, report: String, csv: String, now: LocalDateTime = LocalDateTime.now()) {
     val dir = File(context.cacheDir, "exports").apply { mkdirs() }
     val stamp = accountExportFilename(now).removePrefix("life-metric-").removeSuffix(".json")

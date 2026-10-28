@@ -189,6 +189,102 @@ class AccountExportTest {
         assertEquals(20, parsed.data.workouts.first { it.id == "w-hiit" }.entries[0].workSec)
         assertEquals("moderate", parsed.data.workouts.first { it.id == "w-ball" }.entries[0].intensity)
         assertEquals("Easy walk", parsed.data.workouts.first { it.id == "w-rest" }.entries[0].note)
+        assertNull(parsed.data.workouts.first { it.id == "w-load" }.durationSec)
+        assertEquals(false, parsed.data.profile.workoutMorningReminder)
+        assertEquals("07:00", parsed.data.profile.workoutMorningReminderTime)
+        assertEquals("", parsed.data.workouts.first { it.id == "w-load" }.note)
+        assertEquals("working", parsed.data.workouts.first { it.id == "w-load" }.entries[0].setKind)
+        assertNull(parsed.data.workouts.first { it.id == "w-load" }.entries[0].rpe)
+        assertEquals(0, parsed.data.profile.workoutRestTimerSec)
+    }
+
+    @Test
+    fun workoutDurationAndReminderRoundTrip() {
+        val store = FitnessStore(
+            plans = listOf(
+                FitnessPlan(
+                    id = "plan-1",
+                    name = "Upper",
+                    activityTypeId = "strength_training",
+                    category = "strength",
+                    machines = listOf(Machine("machine-1", "Bench")),
+                ),
+            ),
+            workouts = listOf(
+                Workout(
+                    id = "workout-1",
+                    date = "2026-10-01",
+                    planId = "plan-1",
+                    activityTypeId = "strength_training",
+                    entries = listOf(
+                        WorkoutEntry(
+                            id = "entry-1",
+                            planId = "plan-1",
+                            machineId = "machine-1",
+                            schema = "load",
+                            weight = 135.0,
+                            repetitions = 8,
+                        ),
+                    ),
+                    durationSec = 2700,
+                    note = "travel gym",
+                ),
+            ),
+            profile = UserProfile(
+                firstName = "Ada",
+                lastName = "Lovelace",
+                workoutMorningReminder = true,
+                workoutMorningReminderTime = "06:30",
+                workoutRestTimerSec = 90,
+            ),
+        )
+        val parsed = parseAccountExport(buildAccountExport(store, "mint", "2026-10-12T12:00:00.000Z"))
+        assertEquals(2700, parsed.data.workouts[0].durationSec)
+        assertTrue(parsed.data.profile.workoutMorningReminder)
+        assertEquals("06:30", parsed.data.profile.workoutMorningReminderTime)
+        assertEquals("travel gym", parsed.data.workouts[0].note)
+        assertEquals(90, parsed.data.profile.workoutRestTimerSec)
+    }
+
+    @Test
+    fun workoutSetKindAndRpeRoundTrip() {
+        val store = FitnessStore(
+            plans = listOf(
+                FitnessPlan(
+                    id = "plan-1",
+                    name = "Upper",
+                    activityTypeId = "strength_training",
+                    category = "strength",
+                    machines = listOf(Machine("machine-1", "Bench")),
+                ),
+            ),
+            workouts = listOf(
+                Workout(
+                    id = "workout-1",
+                    date = "2026-10-01",
+                    planId = "plan-1",
+                    activityTypeId = "strength_training",
+                    entries = listOf(
+                        WorkoutEntry(
+                            id = "entry-1",
+                            planId = "plan-1",
+                            machineId = "machine-1",
+                            schema = "load",
+                            weight = 135.0,
+                            repetitions = 8,
+                            setKind = "warmup",
+                            rpe = 7,
+                            restSecTaken = 90,
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val parsed = parseAccountExport(buildAccountExport(store, "mint", "2026-10-12T12:00:00.000Z"))
+        val entry = parsed.data.workouts[0].entries[0]
+        assertEquals("warmup", entry.setKind)
+        assertEquals(7, entry.rpe)
+        assertEquals(90, entry.restSecTaken)
     }
 
     @Test
@@ -362,6 +458,9 @@ class AccountExportTest {
         assertEquals("07:00", parsed.data.profile.weightMorningReminderTime)
         assertEquals(false, parsed.data.profile.weightDisplayKg)
         assertNull(parsed.data.profile.waistInches)
+        assertEquals(false, parsed.data.profile.workoutMorningReminder)
+        assertEquals("07:00", parsed.data.profile.workoutMorningReminderTime)
+        assertEquals(0, parsed.data.profile.workoutRestTimerSec)
     }
 
     @Test

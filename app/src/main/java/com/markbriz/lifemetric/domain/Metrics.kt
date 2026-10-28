@@ -1,6 +1,7 @@
 package com.markbriz.lifemetric.domain
 
 import com.markbriz.lifemetric.data.ActivityCatalog
+import com.markbriz.lifemetric.data.ActivityFamily
 import com.markbriz.lifemetric.data.BloodPressureReading
 import com.markbriz.lifemetric.data.BloodPressureSample
 import com.markbriz.lifemetric.data.EntryMetric
@@ -42,6 +43,10 @@ const val WEIGHT_RATE_LOOKBACK_DAYS = 28
 const val WEIGHT_RATE_MIN_DAYS = 7
 const val WEIGHT_ETA_MIN_LB_PER_WEEK = 0.2
 const val DEFAULT_WEIGHT_MORNING_REMINDER = "07:00"
+const val DEFAULT_WORKOUT_REMINDER = "07:00"
+const val DEFAULT_WORKOUT_REST_SEC = 90
+const val HHS_STRENGTH_DAYS = 2
+const val HHS_AEROBIC_MINUTES = 150
 const val LB_PER_KG = 2.2046226218
 const val MIN_WAIST_IN = 15.0
 const val MAX_WAIST_IN = 80.0
@@ -111,6 +116,30 @@ enum class BmiCategory(
 enum class WeightGoalKind { Lose, Gain, Maintain }
 
 enum class WeightChangeDirection { Up, Down, Unchanged }
+
+enum class WorkoutSetKind(val id: String, val label: String) {
+    Warmup("warmup", "Warm-up"),
+    Working("working", "Working"),
+    Drop("drop", "Drop"),
+    Failure("failure", "Failure"),
+    ;
+
+    companion object {
+        fun fromId(id: String?): WorkoutSetKind =
+            entries.find { it.id.equals(id?.trim().orEmpty(), ignoreCase = true) } ?: Working
+    }
+}
+
+enum class WorkoutHistoryRange(val label: String, val days: Int?) {
+    Last30("30d", 30),
+    All("All", null),
+}
+
+data class ActivityRecord(
+    val weightLb: Double,
+    val repetitions: Int,
+    val estimated1RmLb: Double,
+)
 
 enum class WeightTag(val id: String, val label: String) {
     Morning("morning", "Morning"),
@@ -612,6 +641,16 @@ fun formatBloodPressureReminders(
 
 fun formatWeightReminder(enabled: Boolean, time: String): String =
     if (enabled) "Morning ${formatTime(time.ifBlank { DEFAULT_WEIGHT_MORNING_REMINDER })}" else "Off"
+
+fun formatWorkoutReminder(enabled: Boolean, time: String): String =
+    if (enabled) "Morning ${formatTime(time.ifBlank { DEFAULT_WORKOUT_REMINDER })}" else "Off"
+
+fun formatWorkoutRestTimer(sec: Int): String = if (sec <= 0) "Off" else "${sec}s"
+
+fun formatRestClock(remainingSec: Int): String {
+    val safe = remainingSec.coerceAtLeast(0)
+    return "%d:%02d".format(safe / 60, safe % 60)
+}
 
 fun buildBloodPressureReport(
     readings: List<BloodPressureReading>,
@@ -1140,13 +1179,24 @@ private fun weekStart(iso: String): LocalDate {
     return date.plusDays(diff.toLong())
 }
 
-data class WeekBucket(val label: String, val count: Int)
+data class WeekBucket(val label: String, val count: Int, val volumeLb: Double = 0.0)
 
-fun workoutSessionsByWeek(workouts: List<Workout>, weeks: Int = 8): List<WeekBucket> {
-    val today = LocalDate.now()
+data class WorkoutWeekSummary(
+    val strengthDays: Int,
+    val aerobicMinutes: Int,
+    val strengthTarget: Int = HHS_STRENGTH_DAYS,
+    val aerobicTarget: Int = HHS_AEROBIC_MINUTES,
+)
+
+fun workoutSessionsByWeek(
+    workouts: List<Workout>,
+    weeks: Int = 8,
+    today: String = todayIso(),
+): List<WeekBucket> {
+    val todayDate = parseIsoDate(today) ?: LocalDate.now()
     val formatter = DateTimeFormatter.ofPattern("MMM d", Locale.getDefault())
     val buckets = (weeks - 1 downTo 0).map { offset ->
-        val start = today.minusDays(offset.toLong() * 7)
+        val start = todayDate.minusDays(offset.toLong() * 7)
         val key = weekStart(start.toString())
         key to WeekBucket(start.format(formatter), 0)
     }.toMutableList()
@@ -1155,10 +1205,139 @@ fun workoutSessionsByWeek(workouts: List<Workout>, weeks: Int = 8): List<WeekBuc
         runCatching { weekStart(workout.date) }.getOrNull()?.let { key ->
             val i = index[key] ?: return@forEach
             val current = buckets[i]
-            buckets[i] = key to current.second.copy(count = current.second.count + 1)
+            buckets[i] = key to current.second.copy(
+                count = current.second.count + 1,
+                volumeLb = current.second.volumeLb + sessionVolumeLb(workout.entries),
+            )
         }
     }
     return buckets.map { it.second }
+}
+
+fun isStrengthSession(workout: Workout, plan: FitnessPlan?): Boolean {
+    if (workout.entries.any { it.schema == "load" && !isHollowWorkoutEntry(it) }) return true
+    val typeId = workout.activityTypeId.ifBlank { plan?.activityTypeId }.orEmpty()
+    return typeId.isNotBlank() && ActivityCatalog.familyOf(typeId) == "strength_resistance"
+}
+
+fun aerobicSeconds(entry: WorkoutEntry): Int = when (entry.schema) {
+    "distance_time", "duration", "sport" -> (entry.durationSec ?: 0).coerceAtLeast(0)
+    "interval" -> {
+        val work = (entry.workSec ?: 0).coerceAtLeast(0)
+        val rounds = (entry.rounds ?: 0).coerceAtLeast(0)
+        if (work > 0 && rounds > 0) work * rounds else 0
+    }
+    else -> 0
+}
+
+fun workoutWeekSummary(
+    workouts: List<Workout>,
+    plans: List<FitnessPlan>,
+    today: String = todayIso(),
+): WorkoutWeekSummary {
+    val start = runCatching { weekStart(today) }.getOrElse { return WorkoutWeekSummary(0, 0) }
+    val startIso = start.toString()
+    val endIso = start.plusDays(6).toString()
+    val inWeek = workouts.filter { it.date >= startIso && it.date <= endIso }
+    val strengthDays = inWeek
+        .filter { workout -> isStrengthSession(workout, plans.find { it.id == workout.planId }) }
+        .map { it.date }
+        .toSet()
+        .size
+    val aerobicMinutes = (inWeek.sumOf { workout -> workout.entries.sumOf(::aerobicSeconds) } / 60.0).roundToInt()
+    return WorkoutWeekSummary(strengthDays = strengthDays, aerobicMinutes = aerobicMinutes)
+}
+
+fun formatWorkoutWeekStrength(summary: WorkoutWeekSummary): String =
+    "${summary.strengthDays} of ${summary.strengthTarget} strength days"
+
+fun formatWorkoutWeekAerobic(summary: WorkoutWeekSummary): String =
+    "${summary.aerobicMinutes} of ${summary.aerobicTarget} aerobic minutes"
+
+fun formatWorkoutWeekCaption(): String =
+    "HHS adult target is 150 minutes and 2 strength days. Some is better than none."
+
+fun formatWorkoutWeekLine(summary: WorkoutWeekSummary): String =
+    "${summary.strengthDays}/${summary.strengthTarget} strength days · ${summary.aerobicMinutes}/${summary.aerobicTarget} min"
+
+fun formatVolumeTrendCaption(): String =
+    "Volume is weight × reps × sets. Easy junk sets inflate it."
+
+fun formatSessionDurationInput(durationSec: Int?): String {
+    val sec = durationSec?.takeIf { it > 0 } ?: return ""
+    if (sec % 60 == 0) return (sec / 60).toString()
+    return formatDurationClock(sec)
+}
+
+fun sessionDurationLabel(durationSec: Int?): String? {
+    val sec = durationSec?.takeIf { it > 0 } ?: return null
+    return formatDurationLabel(sec).ifEmpty { null }
+}
+
+fun summarizeWorkout(workout: Workout, useKg: Boolean = false): String {
+    val body = summarizeWorkoutEntries(workout.entries, useKg)
+    val duration = sessionDurationLabel(workout.durationSec)
+    val note = workout.note.trim().takeIf { it.isNotEmpty() }
+    return listOfNotNull(body, duration, note).joinToString(" · ")
+}
+
+fun currentGroupLoad(entries: List<WorkoutEntry>): PreviousLoad? {
+    val last = entries.lastOrNull { it.schema == "load" && !isHollowWorkoutEntry(it) && !isWarmupSet(it) } ?: return null
+    return PreviousLoad(last.weight ?: 0.0, last.repetitions ?: 0)
+}
+
+fun formatActivityVsLastTime(
+    current: PreviousLoad?,
+    previous: PreviousLoad?,
+    useKg: Boolean = false,
+): String? {
+    if (previous == null) return null
+    if (current == null) return formatPreviousLoadSuggestion(previous, useKg)
+    if (current.weight == previous.weight && current.repetitions == previous.repetitions) return null
+    return "${formatLoadPair(current.weight, current.repetitions, useKg)} · last time ${formatLoadPair(previous.weight, previous.repetitions, useKg)}"
+}
+
+fun activityImproved(current: PreviousLoad, previous: PreviousLoad): Boolean =
+    current.weight > previous.weight ||
+        (current.weight == previous.weight && current.repetitions > previous.repetitions)
+
+fun formatWorkoutVsLastTime(
+    workout: Workout,
+    workouts: List<Workout>,
+    plans: List<FitnessPlan>,
+    useKg: Boolean = false,
+): String? {
+    val machineId = workout.entries.firstOrNull { it.schema == "load" && !isHollowWorkoutEntry(it) }?.machineId
+        ?: return null
+    val current = currentGroupLoad(workout.entries.filter { it.machineId == machineId })
+    val previous = findPreviousLoad(
+        workouts = workouts,
+        plans = plans,
+        activityId = machineId,
+        currentWorkoutDate = workout.date,
+        currentEntries = emptyList(),
+        currentWorkoutId = workout.id,
+    )
+    return formatActivityVsLastTime(current, previous, useKg)
+}
+
+fun workoutVsLastImproved(
+    workout: Workout,
+    workouts: List<Workout>,
+    plans: List<FitnessPlan>,
+): Boolean {
+    val machineId = workout.entries.firstOrNull { it.schema == "load" && !isHollowWorkoutEntry(it) }?.machineId
+        ?: return false
+    val current = currentGroupLoad(workout.entries.filter { it.machineId == machineId }) ?: return false
+    val previous = findPreviousLoad(
+        workouts = workouts,
+        plans = plans,
+        activityId = machineId,
+        currentWorkoutDate = workout.date,
+        currentEntries = emptyList(),
+        currentWorkoutId = workout.id,
+    ) ?: return false
+    return activityImproved(current, previous)
 }
 
 fun workoutsInLastDays(workouts: List<Workout>, days: Int): List<Workout> {
@@ -1243,9 +1422,12 @@ data class PreviousLoad(
     val repetitions: Int,
 )
 
+fun latestWorkout(workouts: List<Workout>): Workout? =
+    workouts.maxWithOrNull(compareBy<Workout> { it.date }.thenBy { it.id })
+
 fun lastUsedPlanId(workouts: List<Workout>, plans: List<FitnessPlan>): String? {
     if (plans.isEmpty()) return null
-    val last = workouts.maxWithOrNull(compareBy<Workout> { it.date }.thenBy { it.id })
+    val last = latestWorkout(workouts)
     return last?.planId?.takeIf { id -> plans.any { it.id == id } } ?: plans.first().id
 }
 
@@ -1258,8 +1440,208 @@ fun lastUsedMachineId(workouts: List<Workout>, planId: String, machines: List<Ma
     return machineId?.takeIf { id -> machines.any { it.id == id } } ?: machines.first().id
 }
 
-fun formatPreviousLoadSuggestion(load: PreviousLoad): String =
-    "Last time: ${formatLoadWeight(load.weight)} lb × ${load.repetitions}."
+fun formatLiftWeight(lb: Double, useKg: Boolean = false): String =
+    if (useKg) formatWeightValue(lb, true) else formatLoadWeight(lb)
+
+fun parseLiftWeightInput(text: String, useKg: Boolean, previousLb: Double? = null): Double? {
+    val trimmed = text.trim()
+    if (previousLb != null && formatLiftWeight(previousLb, useKg) == trimmed) return previousLb
+    return parseWeightInput(trimmed, useKg)
+}
+
+fun formatVolume(volumeLb: Double, useKg: Boolean = false): String {
+    val shown = displayWeight(volumeLb, useKg)
+    val amount = if (!useKg && shown == shown.toInt().toDouble()) {
+        String.format(Locale.US, "%,d", shown.toInt())
+    } else {
+        String.format(Locale.US, "%,.1f", shown)
+    }
+    return "$amount ${weightUnit(useKg)}"
+}
+
+fun formatLoadPair(weightLb: Double, repetitions: Int, useKg: Boolean = false): String =
+    "${formatLiftWeight(weightLb, useKg)} × $repetitions"
+
+fun formatPreviousLoadSuggestion(load: PreviousLoad, useKg: Boolean = false): String =
+    "Last time: ${formatLiftWeight(load.weight, useKg)} ${weightUnit(useKg)} × ${load.repetitions}."
+
+fun isWarmupSet(entry: WorkoutEntry): Boolean =
+    WorkoutSetKind.fromId(entry.setKind) == WorkoutSetKind.Warmup
+
+fun loadVolumeLb(entry: WorkoutEntry): Double {
+    if (entry.schema != "load" || isWarmupSet(entry)) return 0.0
+    return (entry.weight ?: 0.0) * (entry.repetitions ?: 0)
+}
+
+fun sessionVolumeLb(entries: List<WorkoutEntry>): Double = entries.sumOf(::loadVolumeLb)
+
+fun epleyOneRepMaxLb(weightLb: Double, repetitions: Int): Double {
+    if (weightLb <= 0) return 0.0
+    if (repetitions <= 1) return weightLb
+    return roundToTenth(weightLb * (1 + repetitions / 30.0))
+}
+
+fun activityPersonalRecord(
+    workouts: List<Workout>,
+    plans: List<FitnessPlan>,
+    activityId: String,
+): ActivityRecord? {
+    val matchingIds = activityIdsWithSameName(plans, activityId)
+    if (matchingIds.isEmpty()) return null
+    val best = workouts.asSequence()
+        .flatMap { it.entries.asSequence() }
+        .filter { it.machineId in matchingIds && it.schema == "load" && !isHollowWorkoutEntry(it) && !isWarmupSet(it) }
+        .maxWithOrNull(compareBy<WorkoutEntry> { it.weight ?: 0.0 }.thenBy { it.repetitions ?: 0 })
+        ?: return null
+    val weight = best.weight ?: return null
+    val reps = best.repetitions ?: return null
+    return ActivityRecord(weight, reps, epleyOneRepMaxLb(weight, reps))
+}
+
+fun formatActivityRecord(record: ActivityRecord, useKg: Boolean = false): String {
+    val pr = "PR ${formatLoadPair(record.weightLb, record.repetitions, useKg)}"
+    val epley = "Epley 1RM ${formatLiftWeight(record.estimated1RmLb, useKg)} ${weightUnit(useKg)}"
+    return "$pr · $epley. Estimate only."
+}
+
+fun filterWorkouts(
+    workouts: List<Workout>,
+    plans: List<FitnessPlan>,
+    range: WorkoutHistoryRange = WorkoutHistoryRange.All,
+    planId: String? = null,
+    familyId: String? = null,
+    today: String = todayIso(),
+): List<Workout> {
+    val cutoff = range.days?.let { days ->
+        parseIsoDate(today)?.minusDays((days - 1).toLong())?.toString()
+    }
+    return workouts.filter { workout ->
+        if (cutoff != null && workout.date < cutoff) return@filter false
+        if (planId != null && workout.planId != planId) return@filter false
+        if (familyId != null) {
+            val typeId = workout.activityTypeId.ifBlank {
+                plans.find { it.id == workout.planId }?.activityTypeId.orEmpty()
+            }
+            if (ActivityCatalog.familyOf(typeId) != familyId) return@filter false
+        }
+        true
+    }.sortedWith(compareByDescending<Workout> { it.date }.thenByDescending { it.id })
+}
+
+fun usedWorkoutPlans(workouts: List<Workout>, plans: List<FitnessPlan>): List<FitnessPlan> {
+    val ids = workouts.map { it.planId }.toSet()
+    return plans.filter { it.id in ids }
+}
+
+fun usedWorkoutFamilies(workouts: List<Workout>, plans: List<FitnessPlan>): List<ActivityFamily> {
+    val ids = workouts.map { workout ->
+        workout.activityTypeId.ifBlank { plans.find { it.id == workout.planId }?.activityTypeId }.orEmpty()
+    }.filter { it.isNotBlank() }.map { ActivityCatalog.familyOf(it) }.toSet()
+    return ActivityCatalog.families.filter { it.id in ids }
+}
+
+fun buildWorkoutCsv(workouts: List<Workout>, plans: List<FitnessPlan>): String {
+    val header = "date,plan,activity,lb,reps,miles,seconds,note"
+    val rows = workouts.sortedWith(compareBy<Workout> { it.date }.thenBy { it.id }).flatMap { workout ->
+        val plan = plans.find { it.id == workout.planId }
+        val sessionNote = workout.note.trim()
+        if (workout.entries.isEmpty()) {
+            listOf(
+                listOf(
+                    workout.date,
+                    csvEscape(plan?.name.orEmpty()),
+                    "",
+                    "",
+                    "",
+                    "",
+                    workout.durationSec?.takeIf { it > 0 }?.toString().orEmpty(),
+                    csvEscape(sessionNote),
+                ).joinToString(","),
+            )
+        } else {
+            workout.entries.map { entry ->
+                val activity = plan?.machines?.find { it.id == entry.machineId }?.name.orEmpty()
+                val note = listOfNotNull(
+                    sessionNote.takeIf { it.isNotEmpty() },
+                    entry.note?.trim()?.takeIf { it.isNotEmpty() },
+                ).joinToString(" | ")
+                listOf(
+                    workout.date,
+                    csvEscape(plan?.name.orEmpty()),
+                    csvEscape(activity),
+                    entry.weight?.takeIf { entry.schema == "load" }?.let(::formatLoadWeight).orEmpty(),
+                    entry.repetitions?.takeIf { entry.schema == "load" }?.toString().orEmpty(),
+                    entry.distanceMi?.takeIf { it > 0 }?.let { milesLabel(it) }.orEmpty(),
+                    entry.durationSec?.takeIf { it > 0 }?.toString()
+                        ?: workout.durationSec?.takeIf { it > 0 }?.toString().orEmpty(),
+                    csvEscape(note),
+                ).joinToString(",")
+            }
+        }
+    }
+    return (listOf(header) + rows).joinToString("\n")
+}
+
+fun buildWorkoutReport(
+    workouts: List<Workout>,
+    plans: List<FitnessPlan>,
+    generatedAt: String,
+): String = buildString {
+    appendLine("Life Metric workout log")
+    appendLine(generatedAt)
+    appendLine()
+    if (workouts.isEmpty()) {
+        appendLine("No sessions in this range.")
+        return@buildString
+    }
+    appendLine("${workouts.size} session${if (workouts.size == 1) "" else "s"}")
+    appendLine()
+    workouts.sortedWith(compareBy<Workout> { it.date }.thenBy { it.id }).forEach { workout ->
+        val plan = plans.find { it.id == workout.planId }
+        appendLine("${formatDate(workout.date)}  ${plan?.name ?: ActivityCatalog.workoutLabel(workout, plan)}")
+        val summary = summarizeWorkout(workout)
+        if (summary.isNotBlank()) appendLine("  $summary")
+        workout.entries.forEach { entry ->
+            val name = plan?.machines?.find { it.id == entry.machineId }?.name ?: "Activity"
+            appendLine("  $name  ${formatWorkoutEntrySummary(entry)}")
+        }
+        appendLine()
+    }
+}
+
+fun isHollowWorkoutEntry(entry: WorkoutEntry): Boolean = when (entry.schema) {
+    "load" -> (entry.weight ?: 0.0) <= 0.0 && (entry.repetitions ?: 0) <= 0
+    "distance_time" -> (entry.distanceMi ?: 0.0) <= 0.0 && (entry.durationSec ?: 0) <= 0
+    "duration", "sport" -> (entry.durationSec ?: 0) <= 0
+    "interval" -> (entry.rounds ?: 0) <= 0
+    else -> false
+}
+
+fun hollowWorkoutEntryError(entry: WorkoutEntry): Pair<String, String>? {
+    if (!isHollowWorkoutEntry(entry)) return null
+    return when (entry.schema) {
+        "load" -> "weight" to "Enter a weight and repetitions."
+        "distance_time" -> "distanceMi" to "Enter a distance or time."
+        "duration", "sport" -> "durationSec" to "Enter minutes greater than 0."
+        "interval" -> "rounds" to "Enter a whole number of rounds."
+        else -> null
+    }
+}
+
+fun bestLoadSet(entries: List<WorkoutEntry>): WorkoutEntry? =
+    entries.filter { it.schema == "load" && !isHollowWorkoutEntry(it) && !isWarmupSet(it) }
+        .maxWithOrNull(compareBy<WorkoutEntry> { it.weight ?: 0.0 }.thenBy { it.repetitions ?: 0 })
+
+fun shortPlanName(name: String?): String {
+    val trimmed = name?.trim().orEmpty()
+    if (trimmed.isEmpty()) return ""
+    return trimmed.substringBefore(" ")
+}
+
+fun formatWorkoutChipLine(workout: Workout, plan: FitnessPlan?, useKg: Boolean = false): String {
+    val title = shortPlanName(plan?.name).ifBlank { ActivityCatalog.workoutLabel(workout, plan) }
+    return "$title · ${summarizeWorkoutEntries(workout.entries, useKg)}"
+}
 
 fun emptyWorkoutEntry(plan: FitnessPlan): WorkoutEntry {
     val schema = ActivityCatalog.schema(plan.activityTypeId)
@@ -1289,9 +1671,39 @@ fun activityIdsWithSameName(plans: List<FitnessPlan>, activityId: String): Set<S
 }
 
 /**
- * Latest load (weight/reps) for the most recent set whose activity has the same name.
+ * Latest saved entry for the most recent set whose activity has the same name.
  * Prefers a later date, then a later set in the same workout.
  */
+fun findPreviousEntry(
+    workouts: List<Workout>,
+    plans: List<FitnessPlan>,
+    activityId: String,
+    currentWorkoutDate: String,
+    currentEntries: List<WorkoutEntry>,
+    currentWorkoutId: String? = null,
+    excludeEntryId: String? = null,
+    schema: String? = null,
+): WorkoutEntry? {
+    val matchingIds = activityIdsWithSameName(plans, activityId)
+    if (matchingIds.isEmpty()) return null
+    data class Candidate(val date: String, val sequence: Int, val entry: WorkoutEntry)
+    val candidates = mutableListOf<Candidate>()
+    fun consider(entry: WorkoutEntry, date: String, sequence: Int) {
+        if (entry.machineId !in matchingIds) return
+        if (schema != null && entry.schema != schema) return
+        if (excludeEntryId != null && entry.id == excludeEntryId) return
+        if (isHollowWorkoutEntry(entry)) return
+        if (isWarmupSet(entry)) return
+        candidates += Candidate(date, sequence, entry)
+    }
+    workouts.forEach { workout ->
+        if (currentWorkoutId != null && workout.id == currentWorkoutId) return@forEach
+        workout.entries.forEachIndexed { index, entry -> consider(entry, workout.date, index) }
+    }
+    currentEntries.forEachIndexed { index, entry -> consider(entry, currentWorkoutDate, index) }
+    return candidates.maxWithOrNull(compareBy<Candidate> { it.date }.thenBy { it.sequence })?.entry
+}
+
 fun findPreviousLoad(
     workouts: List<Workout>,
     plans: List<FitnessPlan>,
@@ -1301,24 +1713,51 @@ fun findPreviousLoad(
     currentWorkoutId: String? = null,
     excludeEntryId: String? = null,
 ): PreviousLoad? {
-    val matchingIds = activityIdsWithSameName(plans, activityId)
-    if (matchingIds.isEmpty()) return null
-    data class Candidate(val date: String, val sequence: Int, val weight: Double, val repetitions: Int)
-    val candidates = mutableListOf<Candidate>()
-    fun consider(entry: WorkoutEntry, date: String, sequence: Int) {
-        if (entry.machineId !in matchingIds || entry.schema != "load") return
-        if (excludeEntryId != null && entry.id == excludeEntryId) return
-        val weight = entry.weight ?: return
-        val repetitions = entry.repetitions ?: return
-        candidates += Candidate(date, sequence, weight, repetitions)
+    val entry = findPreviousEntry(
+        workouts = workouts,
+        plans = plans,
+        activityId = activityId,
+        currentWorkoutDate = currentWorkoutDate,
+        currentEntries = currentEntries,
+        currentWorkoutId = currentWorkoutId,
+        excludeEntryId = excludeEntryId,
+        schema = "load",
+    ) ?: return null
+    return PreviousLoad(entry.weight ?: return null, entry.repetitions ?: return null)
+}
+
+fun formatPreviousActivitySuggestion(entry: WorkoutEntry, useKg: Boolean = false): String {
+    val extras = buildList {
+        if (entry.resistance > 0) add("Resistance ${formatLoadWeight(entry.resistance)}")
+        if (entry.avgSpeedMph > 0) add("${formatLoadWeight(entry.avgSpeedMph)} mph")
+    }.takeIf { it.isNotEmpty() }?.joinToString(" · ", prefix = " · ").orEmpty()
+    val core = when (entry.schema) {
+        "load" -> return formatPreviousLoadSuggestion(
+            PreviousLoad(entry.weight ?: 0.0, entry.repetitions ?: 0),
+            useKg,
+        )
+        "distance_time" -> {
+            val miles = entry.distanceMi ?: 0.0
+            val sec = entry.durationSec ?: 0
+            when {
+                miles > 0 && sec > 0 -> "${milesLabel(miles)} mi · ${formatDurationClock(sec)}"
+                miles > 0 -> "${milesLabel(miles)} mi"
+                sec > 0 -> formatDurationClock(sec)
+                else -> return ""
+            }
+        }
+        "duration", "sport" -> formatDurationLabel(entry.durationSec ?: 0).ifEmpty { return "" }
+        "interval" -> {
+            val rounds = entry.rounds ?: 0
+            listOfNotNull(
+                "$rounds ${if (rounds == 1) "round" else "rounds"}",
+                entry.workSec?.let { "${it}s work" },
+                entry.restSec?.let { "${it}s rest" },
+            ).joinToString(" · ")
+        }
+        else -> return ""
     }
-    workouts.forEach { workout ->
-        if (currentWorkoutId != null && workout.id == currentWorkoutId) return@forEach
-        workout.entries.forEachIndexed { index, entry -> consider(entry, workout.date, index) }
-    }
-    currentEntries.forEachIndexed { index, entry -> consider(entry, currentWorkoutDate, index) }
-    val best = candidates.maxWithOrNull(compareBy<Candidate> { it.date }.thenBy { it.sequence }) ?: return null
-    return PreviousLoad(best.weight, best.repetitions)
+    return "Last time: $core$extras."
 }
 
 fun formatLoadWeight(weight: Double): String =
@@ -1397,18 +1836,23 @@ fun formatResistanceSummary(entries: List<WorkoutEntry>): String? {
     return "Resistance ${formatLoadWeight(values.first())}–${formatLoadWeight(values.last())}"
 }
 
-fun formatWorkoutEntrySummary(entry: WorkoutEntry): String {
+fun distanceTimeLabel(miles: Double, durationSec: Int): String {
+    val milesText = milesLabel(miles)
+    val clock = formatDurationClock(durationSec)
+    val base = if (clock.isEmpty()) "$milesText mi" else "$milesText mi · $clock"
+    val pace = formatPace(miles, durationSec)
+    return if (pace.isEmpty()) base else "$base · $pace"
+}
+
+fun formatWorkoutEntrySummary(entry: WorkoutEntry, useKg: Boolean = false): String {
     val base = when (entry.schema) {
         "load" -> {
             val reps = entry.repetitions ?: 0
             val weight = entry.weight ?: 0.0
-            val weightText = if (weight == weight.toInt().toDouble()) weight.toInt().toString() else formatWeight(weight)
-            "$weightText lb · $reps ${if (reps == 1) "rep" else "reps"}"
+            "${formatLiftWeight(weight, useKg)} ${weightUnit(useKg)} · $reps ${if (reps == 1) "rep" else "reps"}"
         }
         "distance_time" -> {
-            val miles = milesLabel(entry.distanceMi ?: 0.0)
-            val clock = formatDurationClock(entry.durationSec ?: 0)
-            val distanceTime = if (clock.isEmpty()) "$miles mi" else "$miles mi · $clock"
+            val distanceTime = distanceTimeLabel(entry.distanceMi ?: 0.0, entry.durationSec ?: 0)
             val resistance = formatResistance(entry.resistance)
             if (resistance == null) distanceTime else "$resistance · $distanceTime"
         }
@@ -1429,18 +1873,34 @@ fun formatWorkoutEntrySummary(entry: WorkoutEntry): String {
         "note" -> entry.note?.trim().takeUnless { it.isNullOrEmpty() } ?: "Logged"
         else -> "Logged"
     }
-    return base
+    val extras = listOfNotNull(
+        WorkoutSetKind.fromId(entry.setKind).takeIf { it != WorkoutSetKind.Working }?.label,
+        entry.rpe?.takeIf { it in 1..10 }?.let { "RPE $it" },
+    )
+    return if (extras.isEmpty()) base else "$base · ${extras.joinToString(" · ")}"
 }
 
-fun summarizeWorkoutEntries(entries: List<WorkoutEntry>): String {
+fun summarizeWorkoutEntries(entries: List<WorkoutEntry>, useKg: Boolean = false): String {
     if (entries.isEmpty()) return "Nothing logged"
     val schemas = entries.map { it.schema }.toSet()
     if (schemas.size == 1) {
         when (entries.first().schema) {
+            "load" -> {
+                val setText = "${entries.size} ${ActivityCatalog.entryNoun("load", entries.size)}"
+                val volume = sessionVolumeLb(entries)
+                val volumeText = if (volume > 0) " · ${formatVolume(volume, useKg)}" else ""
+                val best = bestLoadSet(entries)
+                val bestText = if (entries.size > 1 && best != null) {
+                    " · best ${formatLoadPair(best.weight ?: 0.0, best.repetitions ?: 0, useKg)}"
+                } else {
+                    ""
+                }
+                return "$setText$volumeText$bestText"
+            }
             "distance_time" -> {
                 val miles = entries.sumOf { it.distanceMi ?: 0.0 }
-                val clock = formatDurationClock(entries.sumOf { it.durationSec ?: 0 })
-                val distanceTime = if (clock.isEmpty()) "${milesLabel(miles)} mi" else "${milesLabel(miles)} mi · $clock"
+                val sec = entries.sumOf { it.durationSec ?: 0 }
+                val distanceTime = distanceTimeLabel(miles, sec)
                 val resistance = formatResistanceSummary(entries)
                 return if (resistance == null) distanceTime else "$resistance · $distanceTime"
             }
@@ -1452,10 +1912,17 @@ fun summarizeWorkoutEntries(entries: List<WorkoutEntry>): String {
             }
             "interval" -> {
                 val rounds = entries.sumOf { it.rounds ?: 0 }
-                return "$rounds ${if (rounds == 1) "round" else "rounds"}"
+                val work = entries.mapNotNull { it.workSec }.takeIf { it.isNotEmpty() }?.sum()
+                val rest = entries.mapNotNull { it.restSec }.takeIf { it.isNotEmpty() }?.sum()
+                val parts = listOfNotNull(
+                    "$rounds ${if (rounds == 1) "round" else "rounds"}",
+                    work?.let { "${it}s work" },
+                    rest?.let { "${it}s rest" },
+                )
+                return parts.joinToString(" · ")
             }
             "note" -> {
-                return if (entries.size == 1) formatWorkoutEntrySummary(entries.first()) else "${entries.size} notes"
+                return if (entries.size == 1) formatWorkoutEntrySummary(entries.first(), useKg) else "${entries.size} notes"
             }
         }
     }

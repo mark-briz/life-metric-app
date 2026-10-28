@@ -212,8 +212,8 @@ object ActivityCatalog {
                 activityTypeId = "strength_training",
                 category = "strength",
                 machines = listOf(
-                    machine("Tricepts Extension", "Extension of the tricepts muscle."),
-                    machine("Bicepts Curl", "Curl of the bicepts muscle."),
+                    machine("Triceps Extension", "Extension of the triceps muscle."),
+                    machine("Biceps Curl", "Curl of the biceps muscle."),
                     machine("Chest Press", "Seated machine press; full range without locking elbows."),
                     machine("Lat Pulldown", "Wide grip to the upper chest."),
                     machine("Rear Deltoid", "Rear deltoid muscle."),

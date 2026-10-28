@@ -4,6 +4,7 @@ import com.markbriz.lifemetric.domain.DEFAULT_BP_WINDOW
 import com.markbriz.lifemetric.domain.MAX_WAIST_IN
 import com.markbriz.lifemetric.domain.MIN_WAIST_IN
 import com.markbriz.lifemetric.domain.clampBpWindow
+import com.markbriz.lifemetric.domain.WorkoutSetKind
 import com.markbriz.lifemetric.domain.roundToTenth
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -140,6 +141,9 @@ private fun dataObject(store: FitnessStore): JsonObject = buildJsonObject {
             put("weightMorningReminderTime", store.profile.weightMorningReminderTime)
             put("weightDisplayKg", store.profile.weightDisplayKg)
             put("waistInches", store.profile.waistInches?.let { JsonPrimitive(it) } ?: JsonNull)
+            put("workoutMorningReminder", store.profile.workoutMorningReminder)
+            put("workoutMorningReminderTime", store.profile.workoutMorningReminderTime)
+            put("workoutRestTimerSec", store.profile.workoutRestTimerSec)
         },
     )
 }
@@ -175,6 +179,8 @@ private fun workoutObject(workout: Workout): JsonObject = buildJsonObject {
     put("date", workout.date)
     put("planId", workout.planId)
     put("activityTypeId", workout.activityTypeId)
+    workout.durationSec?.takeIf { it > 0 }?.let { put("durationSec", it) }
+    workout.note.trim().takeIf { it.isNotEmpty() }?.let { put("note", it) }
     put("entries", buildJsonArray { workout.entries.forEach { add(entryObject(it)) } })
 }
 
@@ -209,6 +215,9 @@ private fun entryObject(entry: WorkoutEntry): JsonObject = buildJsonObject {
     put("avgRpm", entry.avgRpm)
     put("avgHeartRateBpm", entry.avgHeartRateBpm)
     put("maxHeartRateBpm", entry.maxHeartRateBpm)
+    put("setKind", entry.setKind.ifBlank { "working" })
+    entry.rpe?.takeIf { it in 1..10 }?.let { put("rpe", it) }
+    entry.restSecTaken?.takeIf { it > 0 }?.let { put("restSecTaken", it) }
 }
 
 fun parseAccountExport(raw: String): ParsedAccountExport {
@@ -328,6 +337,9 @@ private fun parseEntry(value: JsonElement, plans: List<FitnessPlan>): WorkoutEnt
         avgRpm = record["avgRpm"].asNonNegativeInt(),
         avgHeartRateBpm = record["avgHeartRateBpm"].asNonNegativeInt(),
         maxHeartRateBpm = record["maxHeartRateBpm"].asNonNegativeInt(),
+        setKind = WorkoutSetKind.fromId(record["setKind"].asString()).id,
+        rpe = record["rpe"].asWhole()?.takeIf { it in 1..10 },
+        restSecTaken = record["restSecTaken"].asWhole()?.takeIf { it > 0 },
     )
     return when (schema) {
         "load" -> {
@@ -380,6 +392,8 @@ private fun parseWorkout(value: JsonElement, plans: List<FitnessPlan>): Workout?
         planId = planId,
         activityTypeId = parseActivityTypeId(record["activityTypeId"].asString(), plan?.activityTypeId ?: plan?.category),
         entries = entries.map { if (it.planId == planId) it else it.copy(planId = planId) },
+        durationSec = record["durationSec"].asWhole()?.takeIf { it > 0 },
+        note = record["note"].asString().orEmpty(),
     )
 }
 
@@ -469,6 +483,9 @@ private fun normalizeProfile(value: JsonElement?): UserProfile {
         weightMorningReminderTime = record["weightMorningReminderTime"].asString()?.takeIf { it.isNotBlank() } ?: "07:00",
         weightDisplayKg = record["weightDisplayKg"].asBoolean(),
         waistInches = record["waistInches"].asNumber()?.takeIf { it >= MIN_WAIST_IN && it <= MAX_WAIST_IN }?.let(::roundToTenth),
+        workoutMorningReminder = record["workoutMorningReminder"].asBoolean(),
+        workoutMorningReminderTime = record["workoutMorningReminderTime"].asString()?.takeIf { it.isNotBlank() } ?: "07:00",
+        workoutRestTimerSec = record["workoutRestTimerSec"].asWhole()?.takeIf { it >= 0 } ?: 0,
     )
 }
 

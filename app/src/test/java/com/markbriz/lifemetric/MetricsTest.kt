@@ -73,11 +73,37 @@ import com.markbriz.lifemetric.domain.stepDisplayedWeight
 import com.markbriz.lifemetric.domain.validateWaistInches
 import com.markbriz.lifemetric.domain.weightRecordTags
 import com.markbriz.lifemetric.domain.emptyWorkoutEntry
+import com.markbriz.lifemetric.domain.activityPersonalRecord
+import com.markbriz.lifemetric.domain.buildWorkoutCsv
+import com.markbriz.lifemetric.domain.epleyOneRepMaxLb
+import com.markbriz.lifemetric.domain.filterWorkouts
+import com.markbriz.lifemetric.domain.findPreviousEntry
 import com.markbriz.lifemetric.domain.findPreviousLoad
+import com.markbriz.lifemetric.domain.formatActivityRecord
+import com.markbriz.lifemetric.domain.formatActivityVsLastTime
+import com.markbriz.lifemetric.domain.formatLiftWeight
+import com.markbriz.lifemetric.domain.formatPreviousActivitySuggestion
 import com.markbriz.lifemetric.domain.formatPreviousLoadSuggestion
+import com.markbriz.lifemetric.domain.formatRestClock
+import com.markbriz.lifemetric.domain.formatVolume
+import com.markbriz.lifemetric.domain.formatVolumeTrendCaption
+import com.markbriz.lifemetric.domain.formatWorkoutChipLine
 import com.markbriz.lifemetric.domain.formatWorkoutEntrySummary
+import com.markbriz.lifemetric.domain.formatWorkoutReminder
+import com.markbriz.lifemetric.domain.formatWorkoutRestTimer
+import com.markbriz.lifemetric.domain.formatWorkoutWeekCaption
+import com.markbriz.lifemetric.domain.formatWorkoutWeekLine
+import com.markbriz.lifemetric.domain.sessionVolumeLb
+import com.markbriz.lifemetric.domain.summarizeWorkout
+import com.markbriz.lifemetric.domain.workoutSessionsByWeek
+import com.markbriz.lifemetric.domain.workoutWeekSummary
+import com.markbriz.lifemetric.domain.WorkoutHistoryRange
+import com.markbriz.lifemetric.domain.hollowWorkoutEntryError
+import com.markbriz.lifemetric.domain.isHollowWorkoutEntry
 import com.markbriz.lifemetric.domain.lastUsedMachineId
 import com.markbriz.lifemetric.domain.lastUsedPlanId
+import com.markbriz.lifemetric.domain.latestWorkout
+import com.markbriz.lifemetric.domain.parseLiftWeightInput
 import com.markbriz.lifemetric.domain.PreviousLoad
 import com.markbriz.lifemetric.domain.parseDurationInput
 import com.markbriz.lifemetric.domain.summarizeWorkoutEntries
@@ -418,16 +444,16 @@ class MetricsTest {
             avgHeartRateBpm = 142,
             maxHeartRateBpm = 171,
         )
-        assertEquals("12 mi · 1:00:00", formatWorkoutEntrySummary(entry))
-        assertEquals("12 mi · 1:00:00", summarizeWorkoutEntries(listOf(entry)))
+        assertEquals("12 mi · 1:00:00 · 5:00 / mi", formatWorkoutEntrySummary(entry))
+        assertEquals("12 mi · 1:00:00 · 5:00 / mi", summarizeWorkoutEntries(listOf(entry)))
         assertTrue(!formatWorkoutEntrySummary(entry).contains("mph"))
         assertTrue(!formatWorkoutEntrySummary(entry).contains("rpm"))
         assertTrue(!formatWorkoutEntrySummary(entry).contains("bpm"))
         val withResistance = entry.copy(resistance = 8.0)
-        assertEquals("Resistance 8 · 12 mi · 1:00:00", formatWorkoutEntrySummary(withResistance))
-        assertEquals("Resistance 8 · 12 mi · 1:00:00", summarizeWorkoutEntries(listOf(withResistance)))
+        assertEquals("Resistance 8 · 12 mi · 1:00:00 · 5:00 / mi", formatWorkoutEntrySummary(withResistance))
+        assertEquals("Resistance 8 · 12 mi · 1:00:00 · 5:00 / mi", summarizeWorkoutEntries(listOf(withResistance)))
         assertEquals(
-            "Resistance 6–8 · 24 mi · 2:00:00",
+            "Resistance 6–8 · 24 mi · 2:00:00 · 5:00 / mi",
             summarizeWorkoutEntries(listOf(withResistance, withResistance.copy(id = "e2", resistance = 6.0))),
         )
     }
@@ -480,6 +506,7 @@ class MetricsTest {
     @Test
     fun previousLoadSuggestionIsVisibleCopy() {
         assertEquals("Last time: 50 lb × 12.", formatPreviousLoadSuggestion(PreviousLoad(50.0, 12)))
+        assertEquals("Last time: 22.7 kg × 12.", formatPreviousLoadSuggestion(PreviousLoad(50.0, 12), useKg = true))
     }
 
     @Test
@@ -639,6 +666,7 @@ class MetricsTest {
         assertEquals("segment", ActivityCatalog.entryNoun("distance_time", 1))
         val plans = ActivityCatalog.starterPlans()
         assertEquals(listOf("Upper Body Strength", "Lower Body Focus"), plans.map { it.name })
+        assertEquals(listOf("Triceps Extension", "Biceps Curl"), plans[0].machines.take(2).map { it.name })
         assertEquals(9, plans[0].machines.size)
         assertEquals(3, plans[1].machines.size)
         assertTrue(plans.all { it.activityTypeId == "strength_training" })
@@ -647,10 +675,188 @@ class MetricsTest {
     @Test
     fun emptyWorkoutSummaryAvoidsEntryWording() {
         assertEquals("Nothing logged", summarizeWorkoutEntries(emptyList()))
-        assertEquals("2 sets", summarizeWorkoutEntries(listOf(
-            load("e1", "p", "m", 100.0, 8),
-            load("e2", "p", "m", 110.0, 6),
-        )))
+        assertEquals(
+            "2 sets · 1,460 lb · best 110 × 6",
+            summarizeWorkoutEntries(listOf(
+                load("e1", "p", "m", 100.0, 8),
+                load("e2", "p", "m", 110.0, 6),
+            )),
+        )
+    }
+
+    @Test
+    fun hollowSetsAreRejectedAndSkippedForLastLoad() {
+        assertTrue(isHollowWorkoutEntry(load("e0", "p", "m", 0.0, 0)))
+        assertTrue(!isHollowWorkoutEntry(load("e1", "p", "m", 0.0, 10)))
+        assertTrue(!isHollowWorkoutEntry(load("e2", "p", "m", 135.0, 0)))
+        assertEquals("weight" to "Enter a weight and repetitions.", hollowWorkoutEntryError(load("e0", "p", "m", 0.0, 0)))
+        assertEquals(
+            "distanceMi" to "Enter a distance or time.",
+            hollowWorkoutEntryError(WorkoutEntry("d", "p", "m", schema = "distance_time", distanceMi = 0.0, durationSec = 0)),
+        )
+        assertEquals(
+            "durationSec" to "Enter minutes greater than 0.",
+            hollowWorkoutEntryError(WorkoutEntry("t", "p", "m", schema = "duration", durationSec = 0)),
+        )
+        assertEquals(
+            "rounds" to "Enter a whole number of rounds.",
+            hollowWorkoutEntryError(WorkoutEntry("i", "p", "m", schema = "interval", rounds = 0)),
+        )
+        val plan = FitnessPlan("p", "Upper", activityTypeId = "strength_training", category = "strength", machines = listOf(Machine("m", "Press")))
+        val hollow = Workout("old", "2026-10-01", "p", "strength_training", listOf(load("z", "p", "m", 0.0, 0)))
+        val real = Workout("now", "2026-10-10", "p", "strength_training", listOf(load("a", "p", "m", 135.0, 8)))
+        assertEquals(PreviousLoad(135.0, 8), findPreviousLoad(listOf(hollow, real), listOf(plan), "m", "2026-10-12", emptyList()))
+    }
+
+    @Test
+    fun liftDisplayKeepsStoredPoundsWhenUnchanged() {
+        assertEquals("61.2", formatLiftWeight(135.0, useKg = true))
+        assertEquals(135.0, parseLiftWeightInput("61.2", useKg = true, previousLb = 135.0)!!, 0.0)
+        assertEquals(8_400.0, com.markbriz.lifemetric.domain.sessionVolumeLb(listOf(
+            load("e1", "p", "m", 210.0, 10),
+            load("e2", "p", "m", 210.0, 10),
+            load("e3", "p", "m", 210.0, 10),
+            load("e4", "p", "m", 210.0, 10),
+        )), 0.0)
+        assertEquals("8,400 lb", formatVolume(8400.0))
+        val plan = FitnessPlan("p", "Upper Body Strength", activityTypeId = "strength_training", category = "strength")
+        val workout = Workout("w", "2026-10-10", "p", "strength_training", listOf(load("e1", "p", "m", 135.0, 8)))
+        assertEquals("Upper · 1 set · 1,080 lb", formatWorkoutChipLine(workout, plan))
+        assertEquals("w2", latestWorkout(listOf(
+            Workout("w1", "2026-10-01", "p", "strength_training"),
+            Workout("w2", "2026-10-10", "p", "strength_training"),
+        ))?.id)
+    }
+
+    @Test
+    fun workoutWeekCountsStrengthDaysAndAerobicMinutes() {
+        val lift = FitnessPlan("p-lift", "Upper", activityTypeId = "strength_training", category = "strength")
+        val walk = FitnessPlan("p-walk", "Walk", activityTypeId = "walking", category = "cardio")
+        val hiit = FitnessPlan("p-hiit", "HIIT", activityTypeId = "hiit", category = "conditioning")
+        val workouts = listOf(
+            Workout("mon", "2026-10-26", "p-lift", "strength_training", listOf(load("e1", "p-lift", "m", 135.0, 8))),
+            Workout("wed", "2026-10-28", "p-lift", "strength_training", listOf(load("e2", "p-lift", "m", 145.0, 6))),
+            Workout(
+                "tue",
+                "2026-10-27",
+                "p-walk",
+                "walking",
+                listOf(WorkoutEntry("e3", "p-walk", "m", schema = "distance_time", distanceMi = 3.0, durationSec = 3600)),
+            ),
+            Workout(
+                "thu",
+                "2026-10-29",
+                "p-hiit",
+                "hiit",
+                listOf(WorkoutEntry("e4", "p-hiit", "m", schema = "interval", rounds = 8, workSec = 20, restSec = 10)),
+            ),
+            Workout("old", "2026-10-19", "p-lift", "strength_training", listOf(load("e5", "p-lift", "m", 100.0, 10))),
+        )
+        val week = workoutWeekSummary(workouts, listOf(lift, walk, hiit), today = "2026-10-27")
+        assertEquals(2, week.strengthDays)
+        assertEquals(63, week.aerobicMinutes)
+        assertEquals("2/2 strength days · 63/150 min", formatWorkoutWeekLine(week))
+        assertEquals("HHS adult target is 150 minutes and 2 strength days. Some is better than none.", formatWorkoutWeekCaption())
+        assertEquals("Volume is weight × reps × sets. Easy junk sets inflate it.", formatVolumeTrendCaption())
+    }
+
+    @Test
+    fun weeklyVolumeBucketsUseLoadTonnage() {
+        val workouts = listOf(
+            Workout("this", "2026-10-27", "p", "strength_training", listOf(load("e1", "p", "m", 135.0, 8))),
+            Workout("prior", "2026-10-14", "p", "strength_training", listOf(load("e2", "p", "m", 100.0, 10), load("e3", "p", "m", 100.0, 10))),
+        )
+        val weeks = workoutSessionsByWeek(workouts, weeks = 3, today = "2026-10-27")
+        assertEquals(3, weeks.size)
+        assertEquals(2000.0, weeks[0].volumeLb, 0.0)
+        assertEquals(0.0, weeks[1].volumeLb, 0.0)
+        assertEquals(1080.0, weeks[2].volumeLb, 0.0)
+        assertEquals(1, weeks[2].count)
+    }
+
+    @Test
+    fun vsLastTimeMutesSameLoadAndShowsProgress() {
+        val last = PreviousLoad(130.0, 8)
+        val same = PreviousLoad(135.0, 8)
+        assertEquals("135 × 8 · last time 130 × 8", formatActivityVsLastTime(same, last))
+        assertNull(formatActivityVsLastTime(same, same))
+        assertEquals("Last time: 135 lb × 8.", formatActivityVsLastTime(null, same))
+        assertNull(formatActivityVsLastTime(same, null))
+    }
+
+    @Test
+    fun previousCardioAndDurationSuggestions() {
+        val ride = WorkoutEntry(
+            "e",
+            "p",
+            "m",
+            schema = "distance_time",
+            distanceMi = 3.1,
+            durationSec = 1692,
+            resistance = 8.0,
+            avgSpeedMph = 16.5,
+        )
+        val yoga = WorkoutEntry("y", "p", "mat", schema = "duration", durationSec = 1200)
+        assertEquals("Last time: 3.1 mi · 28:12 · Resistance 8 · 16.5 mph.", formatPreviousActivitySuggestion(ride))
+        assertEquals("Last time: 20 min.", formatPreviousActivitySuggestion(yoga))
+        val plan = FitnessPlan("p", "Ride", activityTypeId = "cycling", category = "cardio", machines = listOf(Machine("m", "Indoor")))
+        val previous = Workout("old", "2026-10-01", "p", "cycling", listOf(ride))
+        assertEquals(3.1, findPreviousEntry(listOf(previous), listOf(plan), "m", "2026-10-12", emptyList())?.distanceMi)
+        val timed = Workout("w", "2026-10-10", "p", "strength_training", listOf(load("e1", "p", "m", 135.0, 8)), durationSec = 2700)
+        assertEquals("1 set · 1,080 lb · 45 min", summarizeWorkout(timed))
+    }
+
+    @Test
+    fun workoutReminderCopyMatchesWeightVoice() {
+        assertEquals("Off", formatWorkoutReminder(false, "07:00"))
+        assertTrue(formatWorkoutReminder(true, "06:30").startsWith("Morning"))
+    }
+
+    @Test
+    fun warmupSetsAreIgnoredForVolumeAndRecords() {
+        val plan = FitnessPlan("p", "Upper", activityTypeId = "strength_training", category = "strength", machines = listOf(Machine("m", "Press")))
+        val warmup = load("w", "p", "m", 185.0, 5).copy(setKind = "warmup")
+        val working = load("a", "p", "m", 135.0, 8)
+        assertEquals(1080.0, sessionVolumeLb(listOf(warmup, working)), 0.0)
+        val record = activityPersonalRecord(
+            listOf(Workout("s", "2026-10-10", "p", "strength_training", listOf(warmup, working))),
+            listOf(plan),
+            "m",
+        )!!
+        assertEquals(135.0, record.weightLb, 0.0)
+        assertEquals(8, record.repetitions)
+        assertEquals(171.0, epleyOneRepMaxLb(135.0, 8), 0.0)
+        assertEquals("PR 135 × 8 · Epley 1RM 171 lb. Estimate only.", formatActivityRecord(record))
+        assertEquals("185 lb · 5 reps · Warm-up", formatWorkoutEntrySummary(warmup))
+        assertEquals("135 lb · 8 reps · RPE 7", formatWorkoutEntrySummary(working.copy(rpe = 7)))
+    }
+
+    @Test
+    fun workoutHistoryFiltersByPlanAndFamily() {
+        val lift = FitnessPlan("p-lift", "Upper", activityTypeId = "strength_training", category = "strength")
+        val walk = FitnessPlan("p-walk", "Walk", activityTypeId = "walking", category = "cardio")
+        val workouts = listOf(
+            Workout("a", "2026-10-27", "p-lift", "strength_training", listOf(load("e1", "p-lift", "m", 135.0, 8))),
+            Workout("b", "2026-10-20", "p-walk", "walking", listOf(WorkoutEntry("e2", "p-walk", "m", schema = "distance_time", distanceMi = 2.0, durationSec = 1800))),
+            Workout("c", "2026-09-01", "p-lift", "strength_training", listOf(load("e3", "p-lift", "m", 100.0, 10))),
+        )
+        val last30 = filterWorkouts(workouts, listOf(lift, walk), WorkoutHistoryRange.Last30, today = "2026-10-27")
+        assertEquals(listOf("a", "b"), last30.map { it.id })
+        assertEquals(listOf("a", "c"), filterWorkouts(workouts, listOf(lift, walk), familyId = "strength_resistance").map { it.id })
+        assertEquals(listOf("b"), filterWorkouts(workouts, listOf(lift, walk), planId = "p-walk").map { it.id })
+    }
+
+    @Test
+    fun workoutShareCsvAndRestCopy() {
+        val plan = FitnessPlan("p", "Upper", activityTypeId = "strength_training", category = "strength", machines = listOf(Machine("m", "Press")))
+        val workout = Workout("w", "2026-10-10", "p", "strength_training", listOf(load("e1", "p", "m", 135.0, 8)), note = "travel gym")
+        val csv = buildWorkoutCsv(listOf(workout), listOf(plan))
+        assertTrue(csv.startsWith("date,plan,activity,lb,reps,miles,seconds,note"))
+        assertTrue(csv.contains("2026-10-10,Upper,Press,135,8,,,travel gym"))
+        assertEquals("Off", formatWorkoutRestTimer(0))
+        assertEquals("90s", formatWorkoutRestTimer(90))
+        assertEquals("1:30", formatRestClock(90))
+        assertEquals("1 set · 1,080 lb · travel gym", summarizeWorkout(workout))
     }
 
     @Test

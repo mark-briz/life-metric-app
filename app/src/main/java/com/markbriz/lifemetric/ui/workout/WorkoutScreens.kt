@@ -3,6 +3,8 @@ package com.markbriz.lifemetric.ui.workout
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -18,16 +20,20 @@ import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -41,19 +47,54 @@ import com.markbriz.lifemetric.data.FitnessStore
 import com.markbriz.lifemetric.data.Workout
 import com.markbriz.lifemetric.data.WorkoutEntry
 import com.markbriz.lifemetric.data.newId
+import com.markbriz.lifemetric.domain.WorkoutHistoryRange
+import com.markbriz.lifemetric.domain.WorkoutSetKind
+import com.markbriz.lifemetric.domain.WorkoutWeekSummary
+import com.markbriz.lifemetric.domain.activityImproved
+import com.markbriz.lifemetric.domain.activityPersonalRecord
+import com.markbriz.lifemetric.domain.buildWorkoutCsv
+import com.markbriz.lifemetric.domain.buildWorkoutReport
+import com.markbriz.lifemetric.domain.currentGroupLoad
+import com.markbriz.lifemetric.domain.filterWorkouts
+import com.markbriz.lifemetric.domain.findPreviousEntry
 import com.markbriz.lifemetric.domain.findPreviousLoad
+import com.markbriz.lifemetric.domain.formatActivityRecord
+import com.markbriz.lifemetric.domain.formatActivityVsLastTime
 import com.markbriz.lifemetric.domain.formatDate
 import com.markbriz.lifemetric.domain.formatDurationClock
-import com.markbriz.lifemetric.domain.formatLoadWeight
+import com.markbriz.lifemetric.domain.formatLiftWeight
+import com.markbriz.lifemetric.domain.formatPreviousActivitySuggestion
 import com.markbriz.lifemetric.domain.formatPreviousLoadSuggestion
+import com.markbriz.lifemetric.domain.formatRelativeDays
+import com.markbriz.lifemetric.domain.formatRestClock
+import com.markbriz.lifemetric.domain.formatSessionDurationInput
+import com.markbriz.lifemetric.domain.formatTime
+import com.markbriz.lifemetric.domain.formatVolumeTrendCaption
 import com.markbriz.lifemetric.domain.formatWorkoutEntrySummary
+import com.markbriz.lifemetric.domain.formatWorkoutVsLastTime
+import com.markbriz.lifemetric.domain.formatWorkoutWeekAerobic
+import com.markbriz.lifemetric.domain.formatWorkoutWeekCaption
+import com.markbriz.lifemetric.domain.formatWorkoutWeekStrength
+import com.markbriz.lifemetric.domain.hollowWorkoutEntryError
+import com.markbriz.lifemetric.domain.isWarmupSet
 import com.markbriz.lifemetric.domain.lastUsedMachineId
+import com.markbriz.lifemetric.domain.latestWorkout
 import com.markbriz.lifemetric.domain.metricDisplay
+import com.markbriz.lifemetric.domain.nowTime
 import com.markbriz.lifemetric.domain.parseDurationInput
-import com.markbriz.lifemetric.domain.summarizeWorkoutEntries
+import com.markbriz.lifemetric.domain.parseLiftWeightInput
+import com.markbriz.lifemetric.domain.summarizeWorkout
 import com.markbriz.lifemetric.domain.todayIso
+import com.markbriz.lifemetric.domain.usedWorkoutFamilies
+import com.markbriz.lifemetric.domain.usedWorkoutPlans
+import com.markbriz.lifemetric.domain.weightUnit
 import com.markbriz.lifemetric.domain.withParsedMetrics
+import com.markbriz.lifemetric.domain.workoutSessionsByWeek
+import com.markbriz.lifemetric.domain.workoutVsLastImproved
+import com.markbriz.lifemetric.domain.workoutWeekSummary
+import com.markbriz.lifemetric.domain.workoutsInLastDays
 import com.markbriz.lifemetric.ui.components.AppScreen
+import com.markbriz.lifemetric.ui.components.ChoiceChip
 import com.markbriz.lifemetric.ui.components.ConfirmDeleteDialog
 import com.markbriz.lifemetric.ui.components.DateTimeFields
 import com.markbriz.lifemetric.ui.components.EmptyState
@@ -64,11 +105,20 @@ import com.markbriz.lifemetric.ui.components.PrimaryButton
 import com.markbriz.lifemetric.ui.components.SectionTitle
 import com.markbriz.lifemetric.ui.components.SettingsRow
 import com.markbriz.lifemetric.ui.components.SurfaceCard
+import com.markbriz.lifemetric.ui.components.StatChip
 import com.markbriz.lifemetric.ui.components.TextLink
+import com.markbriz.lifemetric.ui.components.WorkoutBarChart
 import com.markbriz.lifemetric.ui.components.appTextFieldColors
 import com.markbriz.lifemetric.ui.components.fieldShape
+import com.markbriz.lifemetric.ui.profile.shareWorkoutReport
 import com.markbriz.lifemetric.ui.theme.LocalAppColors
+import kotlinx.coroutines.delay
+import kotlin.math.roundToInt
 
+private const val HISTORY_PAGE = 20
+private val REST_TIMER_OPTIONS = listOf(0, 60, 90, 120)
+
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun WorkoutsScreen(
     store: FitnessStore,
@@ -77,11 +127,30 @@ fun WorkoutsScreen(
     onDelete: (String) -> Unit,
     onPlans: () -> Unit,
     onCreatePlan: () -> Unit,
+    onHowToLog: () -> Unit = {},
+    onReminders: () -> Unit = {},
 ) {
-    val groups = store.workouts.sortedWith(compareByDescending<Workout> { it.date }.thenBy { it.id })
-        .groupBy { it.date }
+    val colors = LocalAppColors.current
+    val context = LocalContext.current
+    val useKg = store.profile.weightDisplayKg
     var pending by remember { mutableStateOf<Workout?>(null) }
+    var listRange by remember { mutableStateOf(WorkoutHistoryRange.All) }
+    var planFilter by remember { mutableStateOf<String?>(null) }
+    var familyFilter by remember { mutableStateOf<String?>(null) }
+    var visibleCount by remember { mutableIntStateOf(HISTORY_PAGE) }
     val hasPlans = store.plans.isNotEmpty()
+    val lastWorkout = latestWorkout(store.workouts)
+    val lastPlan = store.plans.find { it.id == lastWorkout?.planId }
+    val sessions = workoutsInLastDays(store.workouts, 30)
+    val sets = sessions.sumOf { it.entries.size }
+    val weeks = workoutSessionsByWeek(store.workouts, 8)
+    val week = workoutWeekSummary(store.workouts, store.plans)
+    val lastVs = lastWorkout?.let { formatWorkoutVsLastTime(it, store.workouts, store.plans, useKg) }
+    val filtered = filterWorkouts(store.workouts, store.plans, listRange, planFilter, familyFilter)
+    val recent = filtered.take(visibleCount)
+    val groups = recent.groupBy { it.date }
+    val filterPlans = usedWorkoutPlans(store.workouts, store.plans)
+    val filterFamilies = usedWorkoutFamilies(store.workouts, store.plans)
     AppScreen(
         eyebrow = "Workout log",
         title = "Workouts",
@@ -102,9 +171,83 @@ fun WorkoutsScreen(
                 "Create a plan",
                 onCreatePlan,
             )
-        } else if (groups.isEmpty()) {
+        } else if (store.workouts.isEmpty()) {
             EmptyState("No workouts yet", "Pick a plan, then add sets, segments, or blocks.", "Log workout", onAdd)
+            TextLink("How to log", onHowToLog)
+            TextLink("Reminders", onReminders)
         } else {
+            if (lastWorkout != null) {
+                SurfaceCard {
+                    Text("LAST SESSION", color = colors.inkMuted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.1.sp)
+                    Text(
+                        lastPlan?.name ?: ActivityCatalog.workoutLabel(lastWorkout, lastPlan),
+                        color = colors.ink,
+                        fontSize = 28.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                    )
+                    Text(summarizeWorkout(lastWorkout, useKg), color = colors.ink, fontWeight = FontWeight.Medium)
+                    lastVs?.let {
+                        val improved = workoutVsLastImproved(lastWorkout, store.workouts, store.plans)
+                        Text(
+                            it,
+                            color = if (improved) colors.success else colors.inkMuted,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                        )
+                    }
+                    Text(
+                        "${formatRelativeDays(lastWorkout.date)} · ${ActivityCatalog.workoutLabel(lastWorkout, lastPlan)}",
+                        color = colors.inkMuted,
+                    )
+                }
+            }
+            WorkoutWeekCard(week)
+            SectionTitle("History")
+            SurfaceCard {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    StatChip("Sessions (30d)", sessions.size.toString(), null, Modifier.weight(1f))
+                    StatChip("Sets logged (30d)", sets.toString(), null, Modifier.weight(1f))
+                    StatChip("Last session", formatRelativeDays(lastWorkout?.date), lastPlan?.name, Modifier.weight(1f))
+                }
+                if (weeks.any { it.count > 0 }) {
+                    Text("Weekly session count (last 8 weeks)", color = colors.inkMuted, fontSize = 13.sp)
+                    WorkoutBarChart(weeks)
+                }
+                if (weeks.any { it.volumeLb > 0 }) {
+                    Text("Weekly volume (last 8 weeks)", color = colors.inkMuted, fontSize = 13.sp)
+                    WorkoutBarChart(weeks, title = "Volume (lb)") { it.volumeLb.roundToInt() }
+                    Text(formatVolumeTrendCaption(), color = colors.inkFaint, fontSize = 12.sp, lineHeight = 16.sp)
+                }
+                TextLink("How to log", onHowToLog)
+                TextLink("Share log", onClick = {
+                    shareWorkoutReport(
+                        context,
+                        buildWorkoutReport(filtered, store.plans, "${formatDate(todayIso())} ${formatTime(nowTime())}"),
+                        buildWorkoutCsv(filtered, store.plans),
+                    )
+                }, contentDescription = "Share workout log")
+                TextLink("Reminders", onReminders)
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                WorkoutHistoryRange.entries.forEach { range ->
+                    ChoiceChip(range.label, selected = listRange == range, onClick = {
+                        listRange = range
+                        visibleCount = HISTORY_PAGE
+                    })
+                }
+                filterPlans.forEach { plan ->
+                    ChoiceChip(plan.name, selected = planFilter == plan.id, onClick = {
+                        planFilter = if (planFilter == plan.id) null else plan.id
+                        visibleCount = HISTORY_PAGE
+                    })
+                }
+                filterFamilies.forEach { family ->
+                    ChoiceChip(family.chip, selected = familyFilter == family.id, onClick = {
+                        familyFilter = if (familyFilter == family.id) null else family.id
+                        visibleCount = HISTORY_PAGE
+                    })
+                }
+            }
             groups.forEach { (date, workouts) ->
                 SectionTitle(formatDate(date))
                 workouts.forEach { workout ->
@@ -112,12 +255,15 @@ fun WorkoutsScreen(
                     val label = "${ActivityCatalog.workoutLabel(workout, plan)} · ${plan?.name ?: "Unknown plan"}"
                     HistoryRow(
                         primary = label,
-                        secondary = summarizeWorkoutEntries(workout.entries),
+                        secondary = summarizeWorkout(workout, useKg),
                         onClick = { onOpen(workout.id) },
                         overflowLabel = "Delete",
                         onOverflow = { pending = workout },
                     )
                 }
+            }
+            if (recent.size < filtered.size) {
+                TextLink("Show older", onClick = { visibleCount += HISTORY_PAGE })
             }
         }
     }
@@ -132,6 +278,7 @@ fun WorkoutsScreen(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun WorkoutFormScreen(
     store: FitnessStore,
@@ -148,6 +295,11 @@ fun WorkoutFormScreen(
     onPlans: () -> Unit,
     onCreatePlan: () -> Unit,
     onAddActivity: (String) -> Unit,
+    onDuration: (Int?) -> Unit = {},
+    onNote: (String) -> Unit = {},
+    onRestTimer: (Int) -> Unit = {},
+    onRestTaken: (String, Int?) -> Unit = { _, _ -> },
+    onHowToLog: () -> Unit = {},
 ) {
     val colors = LocalAppColors.current
     if (store.plans.isEmpty()) {
@@ -167,9 +319,35 @@ fun WorkoutFormScreen(
     }
     var pendingEntry by remember { mutableStateOf<WorkoutEntry?>(null) }
     var pendingPlanId by remember { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
+    val useKg = store.profile.weightDisplayKg
     val plan = store.plans.find { it.id == workout.planId }
     val schema = plan?.let { ActivityCatalog.schema(it.activityTypeId) } ?: "load"
     val addLabel = ActivityCatalog.addEntryLabel(schema)
+    val restPref = store.profile.workoutRestTimerSec
+    var restRemaining by remember { mutableIntStateOf(0) }
+    var restEntryId by remember { mutableStateOf<String?>(null) }
+    var seenCount by remember(workout.id) { mutableIntStateOf(workout.entries.size) }
+    LaunchedEffect(workout.entries.size) {
+        if (workout.entries.size > seenCount) {
+            val last = workout.entries.lastOrNull()
+            if (last != null && (last.schema == "load" || last.schema == "interval") && !isWarmupSet(last) && restPref > 0) {
+                restRemaining = restPref
+                restEntryId = last.id
+            }
+        }
+        seenCount = workout.entries.size
+    }
+    LaunchedEffect(restRemaining) {
+        if (restRemaining <= 0) return@LaunchedEffect
+        delay(1000)
+        val next = restRemaining - 1
+        restRemaining = next
+        if (next == 0) {
+            restEntryId?.let { onRestTaken(it, restPref) }
+            restEntryId = null
+        }
+    }
     BackHandler(onBack = onBack)
     AppScreen(
         title = if (isNew) "Log workout" else "Edit workout",
@@ -179,6 +357,57 @@ fun WorkoutFormScreen(
     ) {
         SurfaceCard {
             DateTimeFields(workout.date.ifBlank { todayIso() }, "", onDate, {}, showTime = false)
+            var durationText by remember(workout.id, workout.durationSec) {
+                mutableStateOf(formatSessionDurationInput(workout.durationSec))
+            }
+            LabeledField(
+                "Duration (min)",
+                durationText,
+                {
+                    durationText = it
+                    when {
+                        it.isBlank() -> onDuration(null)
+                        parseDurationInput(it) != null -> onDuration(parseDurationInput(it))
+                    }
+                },
+                hint = "Optional. How long the session lasted.",
+                keyboardType = KeyboardType.Decimal,
+            )
+            var noteText by remember(workout.id, workout.note) { mutableStateOf(workout.note) }
+            LabeledField(
+                "Note",
+                noteText,
+                {
+                    noteText = it
+                    onNote(it)
+                },
+                hint = "Optional. Travel gym, short on sleep.",
+            )
+            Text("Rest timer", color = colors.inkMuted, fontSize = 13.sp)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                REST_TIMER_OPTIONS.forEach { sec ->
+                    ChoiceChip(
+                        if (sec == 0) "Off" else "${sec}s",
+                        selected = restPref == sec,
+                        onClick = { onRestTimer(sec) },
+                    )
+                }
+            }
+            if (restRemaining > 0) {
+                Text("Rest ${formatRestClock(restRemaining)}", color = colors.ink, fontWeight = FontWeight.Medium)
+                TextLink("Skip rest", onClick = {
+                    restRemaining = 0
+                    restEntryId = null
+                })
+            }
+            TextLink("How to log", onHowToLog)
+            TextLink("Share session", onClick = {
+                shareWorkoutReport(
+                    context,
+                    buildWorkoutReport(listOf(workout), store.plans, "${formatDate(todayIso())} ${formatTime(nowTime())}"),
+                    buildWorkoutCsv(listOf(workout), store.plans),
+                )
+            }, contentDescription = "Share this workout")
             PlanMenu(store.plans, workout.planId) { planId ->
                 if (planId != workout.planId && workout.entries.isNotEmpty()) {
                     pendingPlanId = planId
@@ -214,6 +443,31 @@ fun WorkoutFormScreen(
                     val name = plan?.machines?.find { it.id == machineId }?.name ?: "Unknown activity"
                     SurfaceCard {
                         Text(name, color = colors.ink, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                        val previous = findPreviousLoad(
+                            workouts = store.workouts,
+                            plans = store.plans,
+                            activityId = machineId,
+                            currentWorkoutDate = workout.date,
+                            currentEntries = emptyList(),
+                            currentWorkoutId = workout.id,
+                        )
+                        val current = currentGroupLoad(sets)
+                        val vs = formatActivityVsLastTime(current, previous, useKg)
+                        val line = vs
+                            ?: previous?.takeIf { current == null }?.let { formatPreviousLoadSuggestion(it, useKg) }
+                        if (line != null) {
+                            val improved = current != null && previous != null && vs != null &&
+                                activityImproved(current, previous)
+                            Text(
+                                line,
+                                color = if (improved) colors.success else colors.inkMuted,
+                                fontSize = 13.sp,
+                            )
+                        }
+                        val history = if (store.workouts.any { it.id == workout.id }) store.workouts else store.workouts + workout
+                        activityPersonalRecord(history, store.plans, machineId)?.let { record ->
+                            Text(formatActivityRecord(record, useKg), color = colors.inkMuted, fontSize = 12.sp)
+                        }
                         sets.forEachIndexed { index, entry ->
                             if (index > 0) HorizontalDivider(color = colors.border)
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -221,7 +475,7 @@ fun WorkoutFormScreen(
                                     if (sets.size > 1) {
                                         Text("Set ${index + 1}", color = colors.inkMuted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                                     }
-                                    Text(formatWorkoutEntrySummary(entry), color = colors.inkMuted, fontSize = 13.sp)
+                                    Text(formatWorkoutEntrySummary(entry, useKg), color = colors.inkMuted, fontSize = 13.sp)
                                 }
                                 IconButton(onClick = { onEditEntry(entry) }) {
                                     Icon(Icons.Default.Edit, contentDescription = "Edit $name ${ActivityCatalog.entryNoun(schema, 1)} ${index + 1}", tint = colors.brandDark)
@@ -261,7 +515,7 @@ fun WorkoutFormScreen(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun WorkoutEntryFormScreen(
     plan: FitnessPlan?,
@@ -272,6 +526,7 @@ fun WorkoutEntryFormScreen(
     currentWorkoutId: String? = null,
     currentWorkoutDate: String = todayIso(),
     currentEntries: List<WorkoutEntry> = emptyList(),
+    useKg: Boolean = false,
     onBack: () -> Unit,
     onSave: (WorkoutEntry) -> Unit,
 ) {
@@ -299,7 +554,7 @@ fun WorkoutEntryFormScreen(
     var machineId by remember(existing?.id, plan.id) {
         mutableStateOf(existing?.machineId?.takeIf { it.isNotBlank() } ?: defaultMachineId)
     }
-    fun previousLoad(forMachineId: String) = findPreviousLoad(
+    fun previousEntry(forMachineId: String) = findPreviousEntry(
         workouts = workouts,
         plans = allPlans,
         activityId = forMachineId,
@@ -307,43 +562,63 @@ fun WorkoutEntryFormScreen(
         currentEntries = currentEntries,
         currentWorkoutId = currentWorkoutId,
         excludeEntryId = existing?.id,
+        schema = schema,
     )
-    val initialLoad = if (isNew && schema == "load") previousLoad(machineId) else null
-    var weight by remember(existing?.id) {
-        mutableStateOf(existing?.weight?.let(::formatLoadWeight) ?: initialLoad?.weight?.let(::formatLoadWeight).orEmpty())
+    val unit = weightUnit(useKg)
+    val extraMetrics = ActivityCatalog.entryMetrics(plan.activityTypeId)
+    val initialPrevious = if (isNew && machineId.isNotBlank()) previousEntry(machineId) else null
+    fun durationField(entry: WorkoutEntry?): String {
+        val sec = entry?.durationSec?.takeIf { it > 0 } ?: return ""
+        return if (schema == "distance_time") formatDurationClock(sec) else formatSessionDurationInput(sec)
     }
-    var reps by remember(existing?.id) {
-        mutableStateOf(existing?.repetitions?.toString() ?: initialLoad?.repetitions?.toString().orEmpty())
+    fun metricMap(entry: WorkoutEntry?) = extraMetrics.associate { metric ->
+        metric.id to entry?.metricDisplay(metric).orEmpty().let { if (it == "0" || it == "0.0") "" else it }
     }
-    var distance by remember(existing?.id) {
-        mutableStateOf(existing?.distanceMi?.takeIf { it > 0 }?.toString().orEmpty())
-    }
-    var duration by remember(existing?.id) {
+    var weight by remember(existing?.id, useKg) {
         mutableStateOf(
-            when (schema) {
-                "distance_time" -> existing?.durationSec?.takeIf { it > 0 }?.let { formatDurationClock(it) }.orEmpty()
-                else -> existing?.durationSec?.takeIf { it > 0 }?.let { (it / 60.0).let { m -> if (m % 1.0 == 0.0) m.toInt().toString() else m.toString() } }.orEmpty()
-            },
+            existing?.weight?.let { formatLiftWeight(it, useKg) }
+                ?: initialPrevious?.weight?.let { formatLiftWeight(it, useKg) }.orEmpty(),
         )
     }
+    var reps by remember(existing?.id) {
+        mutableStateOf(existing?.repetitions?.toString() ?: initialPrevious?.repetitions?.toString().orEmpty())
+    }
+    var distance by remember(existing?.id) {
+        mutableStateOf(
+            existing?.distanceMi?.takeIf { it > 0 }?.toString()
+                ?: initialPrevious?.distanceMi?.takeIf { it > 0 }?.toString().orEmpty(),
+        )
+    }
+    var duration by remember(existing?.id) {
+        mutableStateOf(durationField(existing).ifEmpty { durationField(initialPrevious) })
+    }
     var rounds by remember(existing?.id, plan.activityTypeId) {
-        mutableStateOf(existing?.rounds?.toString() ?: if (tabataDefaults) "8" else "")
+        mutableStateOf(
+            existing?.rounds?.toString()
+                ?: initialPrevious?.rounds?.takeIf { it > 0 }?.toString()
+                ?: if (tabataDefaults) "8" else "",
+        )
     }
     var work by remember(existing?.id, plan.activityTypeId) {
-        mutableStateOf(existing?.workSec?.toString() ?: if (tabataDefaults) "20" else "")
+        mutableStateOf(
+            existing?.workSec?.toString()
+                ?: initialPrevious?.workSec?.takeIf { it > 0 }?.toString()
+                ?: if (tabataDefaults) "20" else "",
+        )
     }
     var rest by remember(existing?.id, plan.activityTypeId) {
-        mutableStateOf(existing?.restSec?.toString() ?: if (tabataDefaults) "10" else "")
+        mutableStateOf(
+            existing?.restSec?.toString()
+                ?: initialPrevious?.restSec?.takeIf { it > 0 }?.toString()
+                ?: if (tabataDefaults) "10" else "",
+        )
     }
     var intensity by remember(existing?.id) { mutableStateOf(existing?.intensity.orEmpty()) }
     var note by remember(existing?.id) { mutableStateOf(existing?.note.orEmpty()) }
-    val extraMetrics = ActivityCatalog.entryMetrics(plan.activityTypeId)
+    var setKind by remember(existing?.id) { mutableStateOf(WorkoutSetKind.fromId(existing?.setKind).id) }
+    var rpe by remember(existing?.id) { mutableStateOf(existing?.rpe?.toString().orEmpty()) }
     var metricDrafts by remember(existing?.id, plan.activityTypeId) {
-        mutableStateOf(
-            extraMetrics.associate { metric ->
-                metric.id to existing?.metricDisplay(metric).orEmpty().let { if (it == "0" || it == "0.0") "" else it }
-            },
-        )
+        mutableStateOf(metricMap(existing).mapValues { (id, value) -> value.ifEmpty { metricMap(initialPrevious)[id].orEmpty() } })
     }
     var errors by remember { mutableStateOf(mapOf<String, String>()) }
     var dirty by remember { mutableStateOf(false) }
@@ -351,6 +626,18 @@ fun WorkoutEntryFormScreen(
 
     fun markDirty() {
         dirty = true
+    }
+
+    fun applyPrevious(entry: WorkoutEntry) {
+        weight = formatLiftWeight(entry.weight ?: 0.0, useKg)
+        reps = (entry.repetitions ?: 0).takeIf { it > 0 }?.toString().orEmpty()
+        distance = entry.distanceMi?.takeIf { it > 0 }?.toString().orEmpty()
+        duration = durationField(entry)
+        rounds = entry.rounds?.takeIf { it > 0 }?.toString().orEmpty().ifEmpty { if (tabataDefaults) "8" else "" }
+        work = entry.workSec?.takeIf { it > 0 }?.toString().orEmpty().ifEmpty { if (tabataDefaults) "20" else "" }
+        rest = entry.restSec?.takeIf { it > 0 }?.toString().orEmpty().ifEmpty { if (tabataDefaults) "10" else "" }
+        metricDrafts = metricMap(entry)
+        markDirty()
     }
 
     fun builtEntry(
@@ -364,19 +651,31 @@ fun WorkoutEntryFormScreen(
         nextRest: String = rest,
         nextIntensity: String = intensity,
         nextNote: String = note,
+        nextSetKind: String = setKind,
+        nextRpe: String = rpe,
         nextMetrics: Map<String, String> = metricDrafts,
     ): Pair<WorkoutEntry?, Map<String, String>> {
         val next = mutableMapOf<String, String>()
         if (nextMachineId.isBlank() || plan.machines.none { it.id == nextMachineId }) {
             next["machineId"] = "Select an activity."
         }
+        val parsedRpe = nextRpe.trim().toIntOrNull()
+        if (nextRpe.isNotBlank() && (parsedRpe == null || parsedRpe !in 1..10)) {
+            next["rpe"] = "Enter 1–10."
+        }
         val built = (existing ?: WorkoutEntry(id = entryId, planId = plan.id, machineId = nextMachineId, schema = schema))
-            .copy(planId = plan.id, machineId = nextMachineId, schema = schema)
+            .copy(
+                planId = plan.id,
+                machineId = nextMachineId,
+                schema = schema,
+                setKind = WorkoutSetKind.fromId(nextSetKind).id,
+                rpe = parsedRpe?.takeIf { it in 1..10 },
+            )
         val entry = when (schema) {
             "load" -> {
-                val w = nextWeight.toDoubleOrNull()
+                val w = parseLiftWeightInput(nextWeight, useKg, existing?.weight)
                 val r = nextReps.toIntOrNull()
-                if (nextWeight.isNotBlank() && (w == null || w < 0)) next["weight"] = "Weight must be 0 or greater."
+                if (nextWeight.isNotBlank() && w == null) next["weight"] = "Weight must be 0 or greater."
                 if (nextReps.isNotBlank() && (r == null || r < 0)) next["repetitions"] = "Repetitions must be 0 or greater."
                 built.copy(weight = w?.takeIf { it >= 0 } ?: 0.0, repetitions = r?.takeIf { it >= 0 } ?: 0)
             }
@@ -403,6 +702,7 @@ fun WorkoutEntryFormScreen(
             }
             else -> built.copy(note = nextNote.trim())
         }
+        hollowWorkoutEntryError(entry)?.let { (field, message) -> next.putIfAbsent(field, message) }
         val (entryWithMetrics, metricErrors) = entry.withParsedMetrics(extraMetrics, nextMetrics)
         next.putAll(metricErrors)
         return if (next.isEmpty()) entryWithMetrics to emptyMap() else null to next
@@ -428,7 +728,8 @@ fun WorkoutEntryFormScreen(
         )
     }
 
-    val previous = if (schema == "load" && machineId.isNotBlank()) previousLoad(machineId) else null
+    val previous = if (machineId.isNotBlank()) previousEntry(machineId) else null
+    val previousCopy = previous?.let { formatPreviousActivitySuggestion(it, useKg) }.orEmpty()
     BackHandler(onBack = { requestBack() })
     AppScreen(
         title = if (isNew) ActivityCatalog.addEntryLabel(schema) else ActivityCatalog.editEntryLabel(schema),
@@ -439,29 +740,19 @@ fun WorkoutEntryFormScreen(
         SurfaceCard {
             MachineMenu(plan, machineId) { nextId ->
                 machineId = nextId
-                if (isNew && schema == "load") {
-                    val load = previousLoad(nextId)
-                    weight = load?.weight?.let(::formatLoadWeight).orEmpty()
-                    reps = load?.repetitions?.toString().orEmpty()
-                }
+                if (isNew) previousEntry(nextId)?.let { applyPrevious(it) }
                 markDirty()
             }
             if (errors["machineId"] != null) Text(errors["machineId"]!!, color = colors.danger, fontSize = 12.sp)
-            if (previous != null) {
+            if (previousCopy.isNotEmpty() && previous != null) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        formatPreviousLoadSuggestion(previous),
+                        previousCopy,
                         color = colors.inkMuted,
                         fontSize = 13.sp,
                         modifier = Modifier.weight(1f),
                     )
-                    TextButton(
-                        onClick = {
-                            weight = formatLoadWeight(previous.weight)
-                            reps = previous.repetitions.toString()
-                            markDirty()
-                        },
-                    ) {
+                    TextButton(onClick = { applyPrevious(previous) }) {
                         Text("Use")
                     }
                 }
@@ -469,7 +760,7 @@ fun WorkoutEntryFormScreen(
             extraMetrics.filter { it.placement == EntryMetricPlacement.Before }.forEach { metricField(it) }
             when (schema) {
                 "load" -> {
-                    LabeledField("Weight", weight, { weight = it; markDirty() }, error = errors["weight"], keyboardType = KeyboardType.Decimal)
+                    LabeledField("Weight ($unit)", weight, { weight = it; markDirty() }, error = errors["weight"], keyboardType = KeyboardType.Decimal)
                     LabeledField("Repetitions", reps, { reps = it.filter(Char::isDigit); markDirty() }, error = errors["repetitions"], keyboardType = KeyboardType.Number)
                 }
                 "distance_time" -> {
@@ -491,6 +782,25 @@ fun WorkoutEntryFormScreen(
                     LabeledField("Rest (sec)", rest, { rest = it.filter(Char::isDigit); markDirty() }, error = errors["restSec"], keyboardType = KeyboardType.Number)
                 }
                 else -> LabeledField("Note (optional)", note, { note = it; markDirty() }, singleLine = false, minLines = 3)
+            }
+            if (schema == "load" || schema == "interval") {
+                Text("Set", color = colors.inkMuted, fontSize = 13.sp)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    WorkoutSetKind.entries.forEach { kind ->
+                        ChoiceChip(kind.label, selected = setKind == kind.id, onClick = {
+                            setKind = kind.id
+                            markDirty()
+                        })
+                    }
+                }
+                LabeledField(
+                    "How hard (RPE)",
+                    rpe,
+                    { rpe = it.filter(Char::isDigit).take(2); markDirty() },
+                    error = errors["rpe"],
+                    hint = "Borg-style 1–10. Optional.",
+                    keyboardType = KeyboardType.Number,
+                )
             }
             extraMetrics.filter { it.placement == EntryMetricPlacement.After }.forEach { metricField(it) }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -588,5 +898,30 @@ private fun IntensityMenu(selected: String, onSelect: (String) -> Unit) {
                 DropdownMenuItem(text = { Text(option) }, onClick = { onSelect(option); open = false })
             }
         }
+    }
+}
+
+@Composable
+private fun WorkoutWeekCard(summary: WorkoutWeekSummary) {
+    val colors = LocalAppColors.current
+    val strength = (summary.strengthDays.toFloat() / summary.strengthTarget).coerceIn(0f, 1f)
+    val aerobic = (summary.aerobicMinutes.toFloat() / summary.aerobicTarget).coerceIn(0f, 1f)
+    SectionTitle("This week")
+    SurfaceCard {
+        Text(formatWorkoutWeekStrength(summary), color = colors.ink, fontWeight = FontWeight.Medium)
+        LinearProgressIndicator(
+            progress = { strength },
+            modifier = Modifier.fillMaxWidth(),
+            color = colors.brand,
+            trackColor = colors.border,
+        )
+        Text(formatWorkoutWeekAerobic(summary), color = colors.ink, fontWeight = FontWeight.Medium)
+        LinearProgressIndicator(
+            progress = { aerobic },
+            modifier = Modifier.fillMaxWidth(),
+            color = colors.brand,
+            trackColor = colors.border,
+        )
+        Text(formatWorkoutWeekCaption(), color = colors.inkMuted, fontSize = 12.sp, lineHeight = 16.sp)
     }
 }

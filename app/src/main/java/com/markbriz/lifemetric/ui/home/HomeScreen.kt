@@ -31,6 +31,9 @@ import com.markbriz.lifemetric.domain.formatTime
 import com.markbriz.lifemetric.domain.formatVisitSummaryLine
 import com.markbriz.lifemetric.domain.formatWeightTrendDelta
 import com.markbriz.lifemetric.domain.formatWeightWithUnit
+import com.markbriz.lifemetric.domain.formatWorkoutChipLine
+import com.markbriz.lifemetric.domain.formatWorkoutWeekLine
+import com.markbriz.lifemetric.domain.latestWorkout
 import com.markbriz.lifemetric.domain.latestBloodPressure
 import com.markbriz.lifemetric.domain.latestWeight
 import com.markbriz.lifemetric.domain.latestWeightTrend
@@ -38,6 +41,7 @@ import com.markbriz.lifemetric.domain.recentBloodPressure
 import com.markbriz.lifemetric.domain.homeWeightChartModel
 import com.markbriz.lifemetric.domain.weightTrendDelta
 import com.markbriz.lifemetric.domain.workoutSessionsByWeek
+import com.markbriz.lifemetric.domain.workoutWeekSummary
 import com.markbriz.lifemetric.domain.workoutsInLastDays
 import com.markbriz.lifemetric.ui.components.AppScreen
 import com.markbriz.lifemetric.ui.components.BloodPressureChart
@@ -75,8 +79,8 @@ fun HomeScreen(
     val showWeightTrend = latestWeight != null && store.weightRecords.size >= 2 && trend != null
     val sessions = workoutsInLastDays(store.workouts, 30)
     val sets = sessions.sumOf { it.entries.size }
-    val lastWorkout = store.workouts.maxByOrNull { it.date }
-    val lastPlan = store.plans.find { it.id == lastWorkout?.planId }?.name
+    val lastWorkout = latestWorkout(store.workouts)
+    val lastPlan = store.plans.find { it.id == lastWorkout?.planId }
     val bpTrend = recentBloodPressure(store.bloodPressureReadings, 10)
     val bpSummary = bloodPressureVisitSummary(
         store.bloodPressureReadings,
@@ -91,6 +95,7 @@ fun HomeScreen(
         calculateBmi(store.profile.weightGoalLb, store.profile.heightInches)
     } else Double.NaN
     val weeks = workoutSessionsByWeek(store.workouts, 8)
+    val week = workoutWeekSummary(store.workouts, store.plans)
     val firstSession = store.bloodPressureReadings.isEmpty() &&
         store.weightRecords.isEmpty() &&
         store.workouts.isEmpty()
@@ -119,7 +124,12 @@ fun HomeScreen(
                 },
                 Modifier.weight(1f),
             )
-            StatChip("Workouts (30d)", sessions.size.toString(), formatRelativeDays(lastWorkout?.date), Modifier.weight(1f))
+            StatChip(
+                if (lastWorkout != null) "Last workout" else "Workouts (30d)",
+                lastWorkout?.let { formatWorkoutChipLine(it, lastPlan, useKg) } ?: "—",
+                if (sessions.isNotEmpty()) "${sessions.size} in 30 days" else "No sessions",
+                Modifier.weight(1f),
+            )
         }
         if (firstSession) {
             SectionTitle("Get started")
@@ -201,12 +211,13 @@ fun HomeScreen(
                 }
             }
         }
-        DashSection("Workouts", "Sessions per week · bar chart", onOpenWorkouts, Icons.Default.FitnessCenter, onAddWorkout, "Log workout") {
+        DashSection("Workouts", "This week · last session", onOpenWorkouts, Icons.Default.FitnessCenter, onAddWorkout, "Log workout") {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 StatChip("Sessions (30d)", sessions.size.toString(), null, Modifier.weight(1f))
                 StatChip("Sets logged (30d)", sets.toString(), null, Modifier.weight(1f))
-                StatChip("Last session", lastWorkout?.let { formatRelativeDays(it.date) } ?: "—", lastPlan, Modifier.weight(1f))
+                StatChip("Last session", lastWorkout?.let { formatRelativeDays(it.date) } ?: "—", lastPlan?.name, Modifier.weight(1f))
             }
+            Text(formatWorkoutWeekLine(week), color = colors.inkMuted, fontSize = 13.sp)
             if (weeks.any { it.count > 0 }) {
                 Text("Weekly session count (last 8 weeks)", color = colors.inkMuted, fontSize = 13.sp)
                 WorkoutBarChart(weeks)

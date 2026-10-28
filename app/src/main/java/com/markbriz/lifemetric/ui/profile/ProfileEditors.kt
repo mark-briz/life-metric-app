@@ -486,6 +486,65 @@ fun WeightReminderEditorScreen(
 }
 
 @Composable
+fun WorkoutReminderEditorScreen(
+    store: FitnessStore,
+    onSave: (enabled: Boolean, time: String) -> Unit,
+    onBack: () -> Unit,
+    backLabel: String = "Profile",
+) {
+    val colors = LocalAppColors.current
+    val context = LocalContext.current
+    var enabled by remember { mutableStateOf(store.profile.workoutMorningReminder) }
+    var time by remember { mutableStateOf(store.profile.workoutMorningReminderTime.ifBlank { "07:00" }) }
+    val ack = rememberSaveAck()
+    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    fun requestNotificationsIfNeeded(on: Boolean) {
+        if (!on || Build.VERSION.SDK_INT < 33) return
+        val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        if (!granted) permission.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+    fun persist(nextEnabled: Boolean = enabled, nextTime: String = time) {
+        requestNotificationsIfNeeded(nextEnabled)
+        onSave(nextEnabled, nextTime)
+        ack.mark(true)
+    }
+    AppScreen(
+        title = "Workout reminders",
+        lead = "Optional morning reminder on this phone. It is not a coaching nudge.",
+        onBack = onBack,
+        backLabel = backLabel,
+    ) {
+        SurfaceCard {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Morning", color = colors.ink, fontWeight = FontWeight.SemiBold)
+                    Text("Local reminder to log today's session.", color = colors.inkMuted, fontSize = 13.sp)
+                }
+                Switch(
+                    checked = enabled,
+                    onCheckedChange = {
+                        enabled = it
+                        persist(nextEnabled = it)
+                    },
+                )
+            }
+            if (enabled) {
+                TimeField(time, {
+                    time = it
+                    persist(nextTime = it)
+                }, label = "Morning time")
+            }
+            SavedHint(ack.visible)
+        }
+    }
+}
+
+@Composable
 fun WeightUnitsEditorScreen(
     useKg: Boolean,
     onSave: (Boolean) -> Unit,

@@ -59,6 +59,7 @@ import com.markbriz.lifemetric.ui.profile.WaistEditorScreen
 import com.markbriz.lifemetric.ui.profile.WeightGoalEditorScreen
 import com.markbriz.lifemetric.ui.profile.WeightReminderEditorScreen
 import com.markbriz.lifemetric.ui.profile.WeightUnitsEditorScreen
+import com.markbriz.lifemetric.ui.profile.WorkoutReminderEditorScreen
 import com.markbriz.lifemetric.ui.theme.LocalAppColors
 import com.markbriz.lifemetric.ui.weight.WeightFormScreen
 import com.markbriz.lifemetric.ui.weight.WeightHowToScreen
@@ -66,6 +67,7 @@ import com.markbriz.lifemetric.ui.weight.WeightScreen
 import com.markbriz.lifemetric.ui.welcome.WelcomeScreen
 import com.markbriz.lifemetric.ui.workout.WorkoutEntryFormScreen
 import com.markbriz.lifemetric.ui.workout.WorkoutFormScreen
+import com.markbriz.lifemetric.ui.workout.WorkoutHowToScreen
 import com.markbriz.lifemetric.ui.workout.WorkoutsScreen
 
 private const val NEW = "new"
@@ -280,7 +282,12 @@ fun LifeMetricApp(viewModel: AppViewModel) {
                         onDelete = viewModel::deleteWorkout,
                         onPlans = { nav.navigate("plans") },
                         onCreatePlan = { nav.navigate("planForm/$NEW") },
+                        onHowToLog = { nav.navigate("workoutHowTo") },
+                        onReminders = { nav.navigate("profileWorkoutReminders") },
                     )
+                }
+                composable("workoutHowTo") {
+                    WorkoutHowToScreen(onBack = { nav.popBackStack() })
                 }
                 composable("workoutForm/{id}") { entry ->
                     val id = entry.arguments?.getString("id")
@@ -311,6 +318,11 @@ fun LifeMetricApp(viewModel: AppViewModel) {
                         onPlans = { nav.navigate("plans") },
                         onCreatePlan = { nav.navigate("planForm/$NEW") },
                         onAddActivity = { planId -> nav.navigate("activityForm/$planId/$NEW") },
+                        onDuration = { duration -> if (workout != null) viewModel.updateWorkoutDuration(workout.id, duration) },
+                        onNote = { note -> if (workout != null) viewModel.updateWorkoutNote(workout.id, note) },
+                        onRestTimer = viewModel::saveWorkoutRestTimer,
+                        onRestTaken = { entryId, rest -> if (workout != null) viewModel.updateWorkoutEntryRest(workout.id, entryId, rest) },
+                        onHowToLog = { nav.navigate("workoutHowTo") },
                     )
                 }
                 composable("workoutEntry/{target}/{entryId}") { entry ->
@@ -330,6 +342,7 @@ fun LifeMetricApp(viewModel: AppViewModel) {
                         currentWorkoutId = target,
                         currentWorkoutDate = workout?.date.orEmpty(),
                         currentEntries = workout?.entries.orEmpty(),
+                        useKg = state.store.profile.weightDisplayKg,
                         onBack = { nav.popBackStack() },
                         onSave = { saved ->
                             viewModel.upsertSavedEntry(target, saved)
@@ -348,6 +361,7 @@ fun LifeMetricApp(viewModel: AppViewModel) {
                         onBpTarget = { nav.navigate("profileBpTarget") },
                         onBpReminders = { nav.navigate("profileBpReminders") },
                         onWeightReminders = { nav.navigate("profileWeightReminders") },
+                        onWorkoutReminders = { nav.navigate("profileWorkoutReminders") },
                         onWeightUnits = { nav.navigate("profileWeightUnits") },
                         onWaist = { nav.navigate("profileWaist") },
                         onTheme = { nav.navigate("profileTheme") },
@@ -409,6 +423,14 @@ fun LifeMetricApp(viewModel: AppViewModel) {
                     WeightReminderEditorScreen(
                         store = state.store,
                         onSave = viewModel::saveWeightReminders,
+                        onBack = { nav.popBackStack() },
+                        backLabel = profileEditorBackLabel(nav.previousBackStackEntry?.destination?.route),
+                    )
+                }
+                composable("profileWorkoutReminders") {
+                    WorkoutReminderEditorScreen(
+                        store = state.store,
+                        onSave = viewModel::saveWorkoutReminders,
                         onBack = { nav.popBackStack() },
                         backLabel = profileEditorBackLabel(nav.previousBackStackEntry?.destination?.route),
                     )
@@ -514,5 +536,7 @@ private fun profileEditorBackLabel(route: String?): String = when (route) {
     "bpHowTo" -> "Blood pressure"
     "weight" -> "Weight"
     "weightHowTo" -> "Weight"
+    "workouts" -> "Workouts"
+    "workoutHowTo" -> "Workouts"
     else -> "Profile"
 }

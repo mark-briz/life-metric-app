@@ -1050,11 +1050,16 @@ fun WeightChart(model: WeightChartModel, goal: Double?, useKg: Boolean = false) 
 }
 
 @Composable
-fun WorkoutBarChart(data: List<WeekBucket>) {
+fun WorkoutBarChart(
+    data: List<WeekBucket>,
+    title: String = "Sessions",
+    valueOf: (WeekBucket) -> Int = { it.count },
+) {
     val colors = LocalAppColors.current
-    Text("Sessions", color = colors.inkMuted, fontSize = 12.sp)
+    val values = data.map(valueOf)
+    Text(title, color = colors.inkMuted, fontSize = 12.sp)
     Canvas(Modifier.fillMaxWidth().height(160.dp)) {
-        val maxCount = data.maxOf { it.count }.coerceAtLeast(1)
+        val maxCount = values.maxOrNull()?.coerceAtLeast(1) ?: 1
         val padL = 22.dp.toPx()
         val gap = 8.dp.toPx()
         val plotWidth = (size.width - padL).coerceAtLeast(1f)
@@ -1079,12 +1084,13 @@ fun WorkoutBarChart(data: List<WeekBucket>) {
                 canvas.nativeCanvas.drawText(tick.toString(), padL - 6.dp.toPx(), tickY, paint)
             }
         }
-        data.forEachIndexed { index, bucket ->
-            val barHeight = (bucket.count.toFloat() / maxCount) * innerHeight
+        data.forEachIndexed { index, _ ->
+            val value = values[index]
+            val barHeight = (value.toFloat() / maxCount) * innerHeight
             drawRoundRect(
-                color = if (bucket.count == 0) colors.border else colors.brand,
+                color = if (value == 0) colors.border else colors.brand,
                 topLeft = Offset(barX(index), size.height - barHeight),
-                size = Size(barWidth, barHeight.coerceAtLeast(if (bucket.count == 0) 2f else 6f)),
+                size = Size(barWidth, barHeight.coerceAtLeast(if (value == 0) 2f else 6f)),
                 cornerRadius = androidx.compose.ui.geometry.CornerRadius(8f, 8f),
             )
         }

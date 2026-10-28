@@ -31,6 +31,7 @@ import com.markbriz.lifemetric.domain.formatBloodPressureTarget
 import com.markbriz.lifemetric.domain.formatHeight
 import com.markbriz.lifemetric.domain.formatWaist
 import com.markbriz.lifemetric.domain.formatWeightReminder
+import com.markbriz.lifemetric.domain.formatWorkoutReminder
 import com.markbriz.lifemetric.domain.formatWeightWithUnit
 import com.markbriz.lifemetric.domain.weightUnit
 import com.markbriz.lifemetric.ui.components.AppScreen
@@ -64,6 +65,7 @@ fun ProfileScreen(
     onBpTarget: () -> Unit,
     onBpReminders: () -> Unit,
     onWeightReminders: () -> Unit,
+    onWorkoutReminders: () -> Unit,
     onWeightUnits: () -> Unit,
     onWaist: () -> Unit,
     onTheme: () -> Unit,
@@ -197,6 +199,12 @@ fun ProfileScreen(
             "Create and edit fitness plans and their activities.",
             onPlans,
             "${store.plans.size}",
+        )
+        SettingsRow(
+            "Workout reminders",
+            "Optional local morning reminder to log today's session.",
+            onWorkoutReminders,
+            formatWorkoutReminder(store.profile.workoutMorningReminder, store.profile.workoutMorningReminderTime),
         )
         SectionTitle("Data")
         SettingsRow(

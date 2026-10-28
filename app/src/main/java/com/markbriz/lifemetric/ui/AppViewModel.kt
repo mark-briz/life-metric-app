@@ -25,6 +25,7 @@ import com.markbriz.lifemetric.domain.validateProfile
 import com.markbriz.lifemetric.domain.validateWaistInches
 import com.markbriz.lifemetric.reminders.BloodPressureReminders
 import com.markbriz.lifemetric.reminders.WeightReminders
+import com.markbriz.lifemetric.reminders.WorkoutReminders
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -73,6 +74,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             _state.value = stateFrom(file, booting = false)
             BloodPressureReminders.sync(getApplication(), file.store.profile)
             WeightReminders.sync(getApplication(), file.store.profile)
+            WorkoutReminders.sync(getApplication(), file.store.profile)
         }
     }
 
@@ -94,6 +96,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 _state.value = stateFrom(file, booting = false)
                 BloodPressureReminders.sync(getApplication(), file.store.profile)
                 WeightReminders.sync(getApplication(), file.store.profile)
+                WorkoutReminders.sync(getApplication(), file.store.profile)
             }
         }
     }
@@ -188,6 +191,25 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         WeightReminders.schedule(getApplication(), enabled, clock)
     }
 
+    fun saveWorkoutReminders(enabled: Boolean, time: String) {
+        val clock = time.ifBlank { "07:00" }
+        mutate { store ->
+            store.copy(
+                profile = store.profile.copy(
+                    workoutMorningReminder = enabled,
+                    workoutMorningReminderTime = clock,
+                ),
+            )
+        }
+        WorkoutReminders.schedule(getApplication(), enabled, clock)
+    }
+
+    fun saveWorkoutRestTimer(sec: Int) {
+        mutate { store ->
+            store.copy(profile = store.profile.copy(workoutRestTimerSec = sec.coerceAtLeast(0)))
+        }
+    }
+
     fun savePlan(planId: String?, name: String, description: String, activityTypeId: String): String? {
         val trimmed = name.trim()
         if (trimmed.isEmpty()) return "Name is required."
@@ -276,6 +298,30 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun updateWorkoutDate(workoutId: String, date: String) {
         if (updateDraft(workoutId) { it.copy(date = date) }) return
         replaceWorkout(workoutId) { it.copy(date = date) }
+    }
+
+    fun updateWorkoutDuration(workoutId: String, durationSec: Int?) {
+        val normalized = durationSec?.takeIf { it > 0 }
+        if (updateDraft(workoutId) { it.copy(durationSec = normalized) }) return
+        replaceWorkout(workoutId) { it.copy(durationSec = normalized) }
+    }
+
+    fun updateWorkoutNote(workoutId: String, note: String) {
+        val trimmed = note.trim()
+        if (updateDraft(workoutId) { it.copy(note = trimmed) }) return
+        replaceWorkout(workoutId) { it.copy(note = trimmed) }
+    }
+
+    fun updateWorkoutEntryRest(workoutId: String, entryId: String, restSecTaken: Int?) {
+        val apply = { workout: Workout ->
+            workout.copy(
+                entries = workout.entries.map { entry ->
+                    if (entry.id == entryId) entry.copy(restSecTaken = restSecTaken?.takeIf { it > 0 }) else entry
+                },
+            )
+        }
+        if (updateDraft(workoutId, apply)) return
+        replaceWorkout(workoutId, apply)
     }
 
     fun updateWorkoutPlan(workoutId: String, planId: String) {
@@ -496,6 +542,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     }
                     BloodPressureReminders.sync(getApplication(), updated.store.profile)
                     WeightReminders.sync(getApplication(), updated.store.profile)
+                    WorkoutReminders.sync(getApplication(), updated.store.profile)
                     onDone(null)
                 }.onFailure { onDone(it.message ?: "Unable to load this file.") }
             }
