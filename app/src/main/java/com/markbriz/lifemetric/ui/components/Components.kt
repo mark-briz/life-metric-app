@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -547,11 +548,19 @@ fun StatChip(label: String, value: String, hint: String?, modifier: Modifier = M
     val colors = LocalAppColors.current
     Column(
         modifier
+            .fillMaxHeight()
             .clip(RoundedCornerShape(16.dp))
             .background(colors.surface.copy(alpha = 0.86f))
             .padding(horizontal = 8.dp, vertical = 10.dp),
     ) {
-        Text(label, color = colors.inkMuted, fontSize = 11.sp, fontWeight = FontWeight.Medium, maxLines = 2)
+        Text(
+            label,
+            color = colors.inkMuted,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            autoSize = TextAutoSize.StepBased(minFontSize = 8.sp, maxFontSize = 11.sp),
+        )
         Text(
             text = value,
             color = colors.ink,

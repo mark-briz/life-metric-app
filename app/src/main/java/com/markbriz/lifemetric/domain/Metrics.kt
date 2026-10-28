@@ -847,8 +847,10 @@ fun weightTrendDelta(
     return roundToTenth(series.last().trendLb - series[priorIndex].trendLb)
 }
 
-fun formatWeightTrendDelta(deltaLb: Double, useKg: Boolean = false): String =
-    "${formatDelta(displayWeight(deltaLb, useKg), weightUnit(useKg))} vs 7-day trend"
+fun formatWeightTrendDelta(deltaLb: Double, useKg: Boolean = false, compact: Boolean = false): String {
+    val delta = formatDelta(displayWeight(deltaLb, useKg), weightUnit(useKg))
+    return if (compact) delta else "$delta vs 7-day trend"
+}
 
 fun weightChartModel(
     records: List<WeightRecord>,

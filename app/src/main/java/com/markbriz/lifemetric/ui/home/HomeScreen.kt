@@ -3,8 +3,10 @@ package com.markbriz.lifemetric.ui.home
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.MonitorHeart
@@ -101,7 +103,10 @@ fun HomeScreen(
         store.workouts.isEmpty()
 
     AppScreen(title = "Dashboard", lead = "Blood pressure, weight, and workouts at a glance.") {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            Modifier.fillMaxWidth().height(IntrinsicSize.Max),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             StatChip(
                 "Latest BP",
                 latestBp?.let { "${it.systolic}/${it.diastolic}" } ?: "—",
@@ -111,14 +116,14 @@ fun HomeScreen(
                 Modifier.weight(1f),
             )
             StatChip(
-                if (showWeightTrend) "Weight trend" else "Latest weight",
+                if (showWeightTrend) "7-Day weight trend" else "Latest weight",
                 when {
                     showWeightTrend -> formatWeightWithUnit(trend!!, useKg)
                     latestWeight != null -> formatWeightWithUnit(latestWeight.weight, useKg)
                     else -> "—"
                 },
                 when {
-                    trendDelta != null -> formatWeightTrendDelta(trendDelta, useKg)
+                    trendDelta != null -> formatWeightTrendDelta(trendDelta, useKg, compact = true)
                     latestWeight != null -> formatDate(latestWeight.date)
                     else -> "No readings"
                 },
@@ -212,7 +217,10 @@ fun HomeScreen(
             }
         }
         DashSection("Workouts", "This week · last session", onOpenWorkouts, Icons.Default.FitnessCenter, onAddWorkout, "Log workout") {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                Modifier.fillMaxWidth().height(IntrinsicSize.Max),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 StatChip("Sessions (30d)", sessions.size.toString(), null, Modifier.weight(1f))
                 StatChip("Sets logged (30d)", sets.toString(), null, Modifier.weight(1f))
                 StatChip("Last session", lastWorkout?.let { formatRelativeDays(it.date) } ?: "—", lastPlan?.name, Modifier.weight(1f))

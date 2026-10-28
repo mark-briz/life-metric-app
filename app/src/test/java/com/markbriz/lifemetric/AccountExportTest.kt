@@ -21,6 +21,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import java.io.File
 import java.time.LocalDateTime
 
 class AccountExportTest {
@@ -558,6 +559,32 @@ class AccountExportTest {
         assertThrowsMessage("workout plan") { parseAccountExport(brokenPlan) }
         val brokenWeight = expoFile.replace("11111111-1111-4111-8111-111111111111", "")
         assertThrowsMessage("weight reading") { parseAccountExport(brokenWeight) }
+    }
+
+    @Test
+    fun sampleYearAccountFileLoads() {
+        val file = listOf(
+            File("docs/sample-life-metric-account.json"),
+            File("../docs/sample-life-metric-account.json"),
+        ).first { it.exists() }
+        val parsed = parseAccountExport(file.readText())
+        assertEquals("mint", parsed.themeId)
+        assertEquals("James", parsed.data.profile.firstName)
+        assertEquals("Carter", parsed.data.profile.lastName)
+        assertEquals(70, parsed.data.profile.heightInches)
+        assertEquals(185.0, parsed.data.profile.weightGoalLb)
+        assertEquals(130, parsed.data.profile.bpTargetSystolic)
+        assertEquals(80, parsed.data.profile.bpTargetDiastolic)
+        assertEquals(3, parsed.data.plans.size)
+        assertTrue(parsed.data.weightRecords.size > 200)
+        assertTrue(parsed.data.bloodPressureReadings.size > 300)
+        assertTrue(parsed.data.workouts.size > 150)
+        val start = parsed.data.weightRecords.minBy { it.date }
+        val latest = parsed.data.weightRecords.maxBy { it.date }
+        assertTrue(start.weight > latest.weight + 10)
+        assertTrue(parsed.data.workouts.any { it.activityTypeId == "strength_training" })
+        assertTrue(parsed.data.workouts.any { it.activityTypeId == "cycling" })
+        assertTrue(parsed.data.weightRecords.any { it.id == parsed.data.profile.weightGoalStartId })
     }
 
     @Test

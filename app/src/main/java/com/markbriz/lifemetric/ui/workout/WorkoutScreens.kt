@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.material.icons.Icons
@@ -204,7 +205,10 @@ fun WorkoutsScreen(
             WorkoutWeekCard(week)
             SectionTitle("History")
             SurfaceCard {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    Modifier.fillMaxWidth().height(IntrinsicSize.Max),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     StatChip("Sessions (30d)", sessions.size.toString(), null, Modifier.weight(1f))
                     StatChip("Sets logged (30d)", sets.toString(), null, Modifier.weight(1f))
                     StatChip("Last session", formatRelativeDays(lastWorkout?.date), lastPlan?.name, Modifier.weight(1f))
