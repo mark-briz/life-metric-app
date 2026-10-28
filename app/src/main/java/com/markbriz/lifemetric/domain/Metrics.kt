@@ -2,6 +2,7 @@ package com.markbriz.lifemetric.domain
 
 import com.markbriz.lifemetric.data.ActivityCatalog
 import com.markbriz.lifemetric.data.BloodPressureReading
+import com.markbriz.lifemetric.data.BloodPressureSample
 import com.markbriz.lifemetric.data.EntryMetric
 import com.markbriz.lifemetric.data.EntryMetricKind
 import com.markbriz.lifemetric.data.EntryMetrics
@@ -22,6 +23,30 @@ import kotlin.math.roundToInt
 const val DEFAULT_BP_WINDOW = 10
 const val MIN_BP_WINDOW = 2
 const val MAX_BP_WINDOW = 60
+const val MIN_SYSTOLIC = 50
+const val MAX_SYSTOLIC = 250
+const val MIN_DIASTOLIC = 30
+const val MAX_DIASTOLIC = 150
+const val MIN_HEART_RATE = 30
+const val MAX_HEART_RATE = 220
+const val WIDE_PULSE_PRESSURE = 80
+const val LOW_SYSTOLIC = 90
+const val LOW_DIASTOLIC = 60
+const val DEFAULT_BP_MORNING_REMINDER = "07:00"
+const val DEFAULT_BP_EVENING_REMINDER = "19:00"
+const val DEFAULT_WEIGHT_TREND_WINDOW = 7
+const val MIN_WEIGHT_LB = 50.0
+const val MAX_WEIGHT_LB = 700.0
+const val WEIGHT_STABLE_LB = 0.5
+const val WEIGHT_RATE_LOOKBACK_DAYS = 28
+const val WEIGHT_RATE_MIN_DAYS = 7
+const val WEIGHT_ETA_MIN_LB_PER_WEEK = 0.2
+const val DEFAULT_WEIGHT_MORNING_REMINDER = "07:00"
+const val LB_PER_KG = 2.2046226218
+const val MIN_WAIST_IN = 15.0
+const val MAX_WAIST_IN = 80.0
+const val WAIST_HIGH_MEN_IN = 40.0
+const val WAIST_HIGH_WOMEN_IN = 35.0
 
 enum class BpStatus(val label: String, val color: Long, val range: String, val description: String) {
     Normal(
@@ -60,12 +85,78 @@ enum class BpStatus(val label: String, val color: Long, val range: String, val d
     }
 }
 
-enum class BmiCategory(val label: String, val range: String, val color: Long) {
-    Under("Under", "0 – <18.5", 0xFF4F7F9C),
-    Healthy("Healthy", "18.5 – 24.9", 0xFF1F6F5B),
-    Over("Over", "25.0 – 29.9", 0xFFC4892A),
-    Obese("Obese", "> 29.9", 0xFFA33B2D),
+enum class BmiCategory(
+    val label: String,
+    val shortLabel: String,
+    val range: String,
+    val color: Long,
+    val gaugeStart: Float,
+    val gaugeEnd: Float,
+) {
+    Under("Underweight", "Under", "Less than 18.5", 0xFF4F7F9C, 12f, 18.5f),
+    Healthy("Healthy weight", "Healthy", "18.5 – 24.9", 0xFF1F6F5B, 18.5f, 25f),
+    Over("Overweight", "Over", "25.0 – 29.9", 0xFFC4892A, 25f, 30f),
+    Obese1("Obesity class 1", "Class 1", "30.0 – 34.9", 0xFFA33B2D, 30f, 35f),
+    Obese2("Obesity class 2", "Class 2", "35.0 – 39.9", 0xFF8B1E1E, 35f, 40f),
+    Obese3("Obesity class 3", "Class 3", "40.0 or greater", 0xFF6B1010, 40f, 45f),
+    ;
+
+    companion object {
+        const val GAUGE_MIN = 12f
+        const val GAUGE_MAX = 45f
+        val gaugeSegments = entries.toList()
+    }
 }
+
+enum class WeightGoalKind { Lose, Gain, Maintain }
+
+enum class WeightChangeDirection { Up, Down, Unchanged }
+
+enum class WeightTag(val id: String, val label: String) {
+    Morning("morning", "Morning"),
+    Evening("evening", "Evening"),
+    AfterExercise("after_exercise", "After exercise"),
+    Travel("travel", "Travel"),
+    ;
+
+    companion object {
+        fun fromId(id: String): WeightTag? = entries.find { it.id == id }
+
+        fun parse(ids: List<String>): List<WeightTag> =
+            ids.mapNotNull(::fromId).distinct()
+    }
+}
+
+enum class WeightChartRange(val label: String, val days: Int?) {
+    Last7("7", 7),
+    Last10("10", 10),
+    Last30("30", 30),
+    Last90("90", 90),
+    All("All", null),
+    ;
+
+    companion object {
+        val hubChoices = listOf(Last7, Last30, Last90, All)
+    }
+}
+
+data class DailyWeight(
+    val date: String,
+    val weight: Double,
+    val sourceId: String,
+)
+
+data class WeightChartModel(
+    val points: List<DailyWeight>,
+    val startDate: String,
+    val endDate: String,
+    val trendByDate: Map<String, Double>,
+)
+
+data class WeightWeeklyRate(
+    val lbPerWeek: Double,
+    val days: Int,
+)
 
 fun todayIso(): String = LocalDate.now().toString()
 
@@ -87,6 +178,30 @@ fun roundToTenth(value: Double): Double = (value * 10.0).roundToInt() / 10.0
 
 fun formatWeight(value: Double): String = String.format(Locale.US, "%.1f", roundToTenth(value))
 
+fun lbToKg(lb: Double): Double = lb / LB_PER_KG
+
+fun kgToLb(kg: Double): Double = kg * LB_PER_KG
+
+fun displayWeight(lb: Double, useKg: Boolean): Double =
+    if (useKg) roundToTenth(lbToKg(lb)) else roundToTenth(lb)
+
+fun parseWeightInput(text: String, useKg: Boolean): Double? {
+    val parsed = text.toDoubleOrNull() ?: return null
+    return roundToTenth(if (useKg) kgToLb(parsed) else parsed)
+}
+
+fun weightUnit(useKg: Boolean): String = if (useKg) "kg" else "lb"
+
+fun formatWeightValue(lb: Double, useKg: Boolean): String = formatWeight(displayWeight(lb, useKg))
+
+fun formatWeightWithUnit(lb: Double, useKg: Boolean): String = "${formatWeightValue(lb, useKg)} ${weightUnit(useKg)}"
+
+fun stepDisplayedWeight(currentLb: Double, deltaDisplay: Double, useKg: Boolean): Double {
+    val nextDisplay = displayWeight(currentLb, useKg) + deltaDisplay
+    val nextLb = if (useKg) kgToLb(nextDisplay) else nextDisplay
+    return roundToTenth(nextLb.coerceIn(MIN_WEIGHT_LB, MAX_WEIGHT_LB))
+}
+
 fun clampBpWindow(value: Int): Int = value.coerceIn(MIN_BP_WINDOW, MAX_BP_WINDOW)
 
 fun calculateBmi(weightLb: Double, heightInches: Int): Double {
@@ -101,7 +216,15 @@ fun bmiCategory(bmi: Double): BmiCategory? = when {
     bmi < 18.5 -> BmiCategory.Under
     bmi <= 24.9 -> BmiCategory.Healthy
     bmi <= 29.9 -> BmiCategory.Over
-    else -> BmiCategory.Obese
+    bmi < 35.0 -> BmiCategory.Obese1
+    bmi < 40.0 -> BmiCategory.Obese2
+    else -> BmiCategory.Obese3
+}
+
+fun formatBmiCaption(bmi: Double, compact: Boolean): String? {
+    val category = bmiCategory(bmi) ?: return null
+    val label = if (compact) category.shortLabel else category.label
+    return "$label · CDC adult screening"
 }
 
 fun bloodPressureStatus(systolic: Int, diastolic: Int): BpStatus = when {
@@ -110,6 +233,503 @@ fun bloodPressureStatus(systolic: Int, diastolic: Int): BpStatus = when {
     (systolic in 130..139) || (diastolic in 80..89) -> BpStatus.Stage1
     systolic in 120..129 && diastolic < 80 -> BpStatus.Elevated
     else -> BpStatus.Normal
+}
+
+fun pulsePressure(systolic: Int, diastolic: Int): Int = systolic - diastolic
+
+fun meanArterialPressure(systolic: Int, diastolic: Int): Int =
+    ((systolic + 2 * diastolic) / 3.0).roundToInt()
+
+fun formatBloodPressure(systolic: Int, diastolic: Int, heartRate: Int? = null): String {
+    val pressure = "$systolic / $diastolic mmHg"
+    return if (heartRate == null) pressure else "$pressure · $heartRate bpm"
+}
+
+fun formatBloodPressureCompact(systolic: Int, diastolic: Int, heartRate: Int? = null): String {
+    val pressure = "$systolic/$diastolic mmHg"
+    return if (heartRate == null) pressure else "$pressure, $heartRate bpm"
+}
+
+fun formatDerivedBloodPressure(systolic: Int, diastolic: Int): String =
+    "PP ${pulsePressure(systolic, diastolic)} · MAP ${meanArterialPressure(systolic, diastolic)}"
+
+fun formatPreviousBloodPressure(systolic: Int, diastolic: Int, heartRate: Int?): String {
+    val pressure = "$systolic / $diastolic"
+    return if (heartRate == null) "Last time: $pressure." else "Last time: $pressure · $heartRate bpm."
+}
+
+data class BloodPressureDelta(val systolic: Int, val diastolic: Int)
+
+fun bloodPressureDelta(readings: List<BloodPressureReading>): BloodPressureDelta? {
+    val sorted = readings.sortedWith(
+        compareByDescending<BloodPressureReading> { dateTimeKey(it.date, it.time) }.thenByDescending { it.id },
+    )
+    if (sorted.size < 2) return null
+    return BloodPressureDelta(
+        systolic = sorted[0].systolic - sorted[1].systolic,
+        diastolic = sorted[0].diastolic - sorted[1].diastolic,
+    )
+}
+
+fun formatBloodPressureDelta(delta: BloodPressureDelta): String {
+    if (delta.systolic == 0 && delta.diastolic == 0) return "No change vs prior"
+    return "${formatSigned(delta.systolic)} / ${formatSigned(delta.diastolic)} mmHg vs prior"
+}
+
+private fun formatSigned(value: Int): String = if (value > 0) "+$value" else value.toString()
+
+data class BloodPressureValidation(
+    val systolic: Int? = null,
+    val diastolic: Int? = null,
+    val heartRate: Int? = null,
+    val errors: Map<String, String> = emptyMap(),
+) {
+    val ok: Boolean get() = errors.isEmpty() && systolic != null && diastolic != null
+}
+
+fun validateBloodPressureReading(
+    date: String,
+    time: String,
+    systolicText: String,
+    diastolicText: String,
+    heartRateText: String,
+): BloodPressureValidation {
+    val errors = mutableMapOf<String, String>()
+    if (date.isBlank()) errors["date"] = "Date is required."
+    if (time.isBlank()) errors["time"] = "Time is required."
+    val systolic = systolicText.toIntOrNull()
+    val diastolic = diastolicText.toIntOrNull()
+    if (systolic == null) errors["systolic"] = "Enter a whole-number systolic reading."
+    else if (systolic !in MIN_SYSTOLIC..MAX_SYSTOLIC) errors["systolic"] = "Systolic must be $MIN_SYSTOLIC–$MAX_SYSTOLIC."
+    if (diastolic == null) errors["diastolic"] = "Enter a whole-number diastolic reading."
+    else if (diastolic !in MIN_DIASTOLIC..MAX_DIASTOLIC) errors["diastolic"] = "Diastolic must be $MIN_DIASTOLIC–$MAX_DIASTOLIC."
+    else if (systolic != null && diastolic >= systolic) errors["diastolic"] = "Diastolic should be lower than systolic."
+    val heartRateTextTrimmed = heartRateText.trim()
+    val heartRate = if (heartRateTextTrimmed.isEmpty()) {
+        null
+    } else {
+        val parsed = heartRateTextTrimmed.toIntOrNull()
+        if (parsed == null) {
+            errors["heartRate"] = "Enter a whole-number heart rate."
+            null
+        } else if (parsed !in MIN_HEART_RATE..MAX_HEART_RATE) {
+            errors["heartRate"] = "Heart rate must be $MIN_HEART_RATE–$MAX_HEART_RATE."
+            null
+        } else {
+            parsed
+        }
+    }
+    return BloodPressureValidation(systolic, diastolic, heartRate, errors)
+}
+
+fun bloodPressureLowHint(systolic: Int, diastolic: Int): String? =
+    if (systolic < LOW_SYSTOLIC || diastolic < LOW_DIASTOLIC) {
+        "This is lower than the usual adult range. The AHA chart is for high blood pressure."
+    } else {
+        null
+    }
+
+fun systolicOnlyStatus(systolic: Int): BpStatus = when {
+    systolic > 180 -> BpStatus.Severe
+    systolic >= 140 -> BpStatus.Stage2
+    systolic in 130..139 -> BpStatus.Stage1
+    systolic in 120..129 -> BpStatus.Elevated
+    else -> BpStatus.Normal
+}
+
+fun diastolicOnlyStatus(diastolic: Int): BpStatus = when {
+    diastolic > 120 -> BpStatus.Severe
+    diastolic >= 90 -> BpStatus.Stage2
+    diastolic in 80..89 -> BpStatus.Stage1
+    else -> BpStatus.Normal
+}
+
+fun isolatedBloodPressureNote(systolic: Int, diastolic: Int): String? {
+    val combined = bloodPressureStatus(systolic, diastolic)
+    if (combined == BpStatus.Normal) return null
+    val sys = systolicOnlyStatus(systolic)
+    val dia = diastolicOnlyStatus(diastolic)
+    return when {
+        sys == combined && dia != combined -> "Systolic is in ${combined.label}; diastolic is not."
+        dia == combined && sys != combined -> "Diastolic is in ${combined.label}; systolic is not."
+        else -> null
+    }
+}
+
+fun bloodPressureSaveHint(systolic: Int, diastolic: Int): String? {
+    val severe = bloodPressureStatus(systolic, diastolic) == BpStatus.Severe
+    val pulse = pulsePressure(systolic, diastolic)
+    val wide = pulse >= WIDE_PULSE_PRESSURE
+    return when {
+        severe && wide ->
+            "This reading is Severe Hypertension, and pulse pressure is $pulse mm Hg. Wait 1 minute and take it again if you can."
+        severe ->
+            "This reading is Severe Hypertension. Wait 1 minute and take it again if you can."
+        wide ->
+            "Pulse pressure is $pulse mm Hg. A gap of $WIDE_PULSE_PRESSURE or more can be worth mentioning to a clinician."
+        else -> null
+    }
+}
+
+fun bloodPressureSaveWarning(systolic: Int, diastolic: Int): String? {
+    val hint = bloodPressureSaveHint(systolic, diastolic) ?: return null
+    val suffix = if (bloodPressureStatus(systolic, diastolic) == BpStatus.Severe) {
+        "Save it anyway?"
+    } else {
+        "Save this reading?"
+    }
+    return "$hint $suffix"
+}
+
+/** 0–1 position inside the AHA category so the Home gauge follows status, not systolic alone. */
+fun bloodPressureGaugeProgress(systolic: Int, diastolic: Int): Float {
+    val inner = when (bloodPressureStatus(systolic, diastolic)) {
+        BpStatus.Normal -> maxOf(unitProgress(systolic, 80, 120), unitProgress(diastolic, 40, 80))
+        BpStatus.Elevated -> unitProgress(systolic, 120, 130)
+        BpStatus.Stage1 -> maxOf(
+            if (systolic in 130..139) unitProgress(systolic, 130, 140) else 0f,
+            if (diastolic in 80..89) unitProgress(diastolic, 80, 90) else 0f,
+        )
+        BpStatus.Stage2 -> maxOf(
+            if (systolic in 140..180) unitProgress(systolic, 140, 181) else 0f,
+            if (diastolic in 90..120) unitProgress(diastolic, 90, 121) else 0f,
+        )
+        BpStatus.Severe -> maxOf(
+            if (systolic > 180) unitProgress(systolic, 181, 201) else 0f,
+            if (diastolic > 120) unitProgress(diastolic, 121, 151) else 0f,
+        )
+    }
+    return inner.coerceIn(0f, 1f)
+}
+
+private fun unitProgress(value: Int, start: Int, end: Int): Float {
+    val span = (end - start).toFloat().coerceAtLeast(1f)
+    return ((value - start) / span).coerceIn(0f, 1f)
+}
+
+enum class BloodPressurePeriod(val id: String, val label: String) {
+    Morning("morning", "Morning"),
+    Evening("evening", "Evening"),
+    Other("other", "Other");
+
+    companion object {
+        fun fromId(id: String?): BloodPressurePeriod? = entries.find { it.id == id }
+    }
+}
+
+enum class BloodPressureTag(val id: String, val label: String) {
+    LeftArm("left_arm", "Left arm"),
+    RightArm("right_arm", "Right arm"),
+    BeforeMedication("before_medication", "Before medication"),
+    AfterMedication("after_medication", "After medication"),
+    AfterExercise("after_exercise", "After exercise"),
+    AfterCaffeine("after_caffeine", "After caffeine"),
+    FeltUnwell("felt_unwell", "Felt unwell");
+
+    companion object {
+        fun fromId(id: String): BloodPressureTag? = entries.find { it.id == id }
+
+        fun parse(ids: List<String>): List<BloodPressureTag> =
+            ids.mapNotNull(::fromId).distinct()
+    }
+}
+
+enum class BloodPressureChartRange(val label: String, val limit: Int?) {
+    Last7("7", 7),
+    Last10("10", 10),
+    Last30("30", 30),
+    All("All", null),
+}
+
+data class BloodPressureSave(
+    val date: String,
+    val time: String,
+    val systolic: Int,
+    val diastolic: Int,
+    val heartRate: Int? = null,
+    val period: String? = null,
+    val pairId: String? = null,
+    val averagedFrom: List<BloodPressureSample> = emptyList(),
+    val tags: List<String> = emptyList(),
+    val note: String = "",
+)
+
+data class BloodPressureMean(
+    val systolic: Int,
+    val diastolic: Int,
+    val count: Int,
+    val heartRate: Int? = null,
+)
+
+data class BloodPressureTargetProgress(
+    val targetSystolic: Int,
+    val targetDiastolic: Int,
+    val last7Met: Int,
+    val last7Total: Int,
+    val last30Met: Int,
+    val last30Total: Int,
+)
+
+data class BloodPressureVisitSummary(
+    val count: Int,
+    val meanSystolic: Int,
+    val meanDiastolic: Int,
+    val meanHeartRate: Int?,
+    val status: BpStatus,
+    val morning: BloodPressureMean?,
+    val evening: BloodPressureMean?,
+    val target: BloodPressureTargetProgress?,
+)
+
+fun inferBloodPressurePeriod(time: String): BloodPressurePeriod {
+    val hour = runCatching { LocalTime.parse(time).hour }.getOrNull()
+        ?: time.substringBefore(":").toIntOrNull()
+        ?: return BloodPressurePeriod.Other
+    return when {
+        hour < 12 -> BloodPressurePeriod.Morning
+        hour >= 16 -> BloodPressurePeriod.Evening
+        else -> BloodPressurePeriod.Other
+    }
+}
+
+fun bloodPressurePeriod(reading: BloodPressureReading): BloodPressurePeriod =
+    BloodPressurePeriod.fromId(reading.period) ?: inferBloodPressurePeriod(reading.time)
+
+fun averageBloodPressureSamples(samples: List<BloodPressureSample>): BloodPressureSample? {
+    if (samples.isEmpty()) return null
+    val heartRates = samples.mapNotNull { it.heartRate }
+    return BloodPressureSample(
+        systolic = samples.map { it.systolic }.average().roundToInt(),
+        diastolic = samples.map { it.diastolic }.average().roundToInt(),
+        heartRate = if (heartRates.isEmpty()) null else heartRates.average().roundToInt(),
+    )
+}
+
+fun meanBloodPressure(readings: List<BloodPressureReading>): BloodPressureMean? {
+    if (readings.isEmpty()) return null
+    val heartRates = readings.mapNotNull { it.heartRate }
+    return BloodPressureMean(
+        systolic = readings.map { it.systolic }.average().roundToInt(),
+        diastolic = readings.map { it.diastolic }.average().roundToInt(),
+        count = readings.size,
+        heartRate = if (heartRates.isEmpty()) null else heartRates.average().roundToInt(),
+    )
+}
+
+fun bloodPressureInLastDays(
+    readings: List<BloodPressureReading>,
+    days: Int,
+    today: String = todayIso(),
+): List<BloodPressureReading> {
+    val end = runCatching { LocalDate.parse(today) }.getOrNull() ?: return emptyList()
+    val start = end.minusDays((days - 1).coerceAtLeast(1).toLong()).toString()
+    return chronologicalBp(readings).filter { it.date in start..today }
+}
+
+fun meetsBloodPressureTarget(reading: BloodPressureReading, targetSystolic: Int, targetDiastolic: Int): Boolean =
+    reading.systolic <= targetSystolic && reading.diastolic <= targetDiastolic
+
+fun bloodPressureVisitSummary(
+    readings: List<BloodPressureReading>,
+    targetSystolic: Int?,
+    targetDiastolic: Int?,
+    today: String = todayIso(),
+): BloodPressureVisitSummary? {
+    val last7 = bloodPressureInLastDays(readings, 7, today)
+    val mean = meanBloodPressure(last7) ?: return null
+    val morning = meanBloodPressure(last7.filter { bloodPressurePeriod(it) == BloodPressurePeriod.Morning })
+    val evening = meanBloodPressure(last7.filter { bloodPressurePeriod(it) == BloodPressurePeriod.Evening })
+    val last30 = bloodPressureInLastDays(readings, 30, today)
+    val target = if (targetSystolic != null && targetDiastolic != null) {
+        BloodPressureTargetProgress(
+            targetSystolic = targetSystolic,
+            targetDiastolic = targetDiastolic,
+            last7Met = last7.count { meetsBloodPressureTarget(it, targetSystolic, targetDiastolic) },
+            last7Total = last7.size,
+            last30Met = last30.count { meetsBloodPressureTarget(it, targetSystolic, targetDiastolic) },
+            last30Total = last30.size,
+        )
+    } else {
+        null
+    }
+    return BloodPressureVisitSummary(
+        count = mean.count,
+        meanSystolic = mean.systolic,
+        meanDiastolic = mean.diastolic,
+        meanHeartRate = mean.heartRate,
+        status = bloodPressureStatus(mean.systolic, mean.diastolic),
+        morning = morning,
+        evening = evening,
+        target = target,
+    )
+}
+
+fun formatVisitSummaryLine(summary: BloodPressureVisitSummary): String =
+    "7-day average is ${summary.status.label} · ${summary.meanSystolic} / ${summary.meanDiastolic}"
+
+fun formatBloodPressureTarget(systolic: Int?, diastolic: Int?): String =
+    if (systolic == null || diastolic == null) "Not set" else "$systolic / $diastolic"
+
+fun formatBloodPressureTags(ids: List<String>): String =
+    BloodPressureTag.parse(ids).joinToString(", ") { it.label }
+
+fun filterBloodPressureReadings(
+    readings: List<BloodPressureReading>,
+    period: BloodPressurePeriod? = null,
+    tags: Collection<String> = emptyList(),
+): List<BloodPressureReading> {
+    val required = BloodPressureTag.parse(tags.toList()).map { it.id }
+    return readings.filter { reading ->
+        (period == null || bloodPressurePeriod(reading) == period) &&
+            required.all { tag -> tag in reading.tags }
+    }
+}
+
+fun formatBloodPressureHistoryLine(reading: BloodPressureReading): String {
+    val pair = if (reading.averagedFrom.size >= 2) "2 readings" else null
+    val tags = formatBloodPressureTags(reading.tags).takeIf { it.isNotEmpty() }
+    val note = reading.note.trim().takeIf { it.isNotEmpty() }
+    return listOfNotNull(
+        "${formatDate(reading.date)} · ${formatTime(reading.time)} · ${bloodPressurePeriod(reading).label}",
+        pair,
+        tags,
+        note,
+    ).joinToString(" · ")
+}
+
+fun formatBloodPressureReminders(
+    morning: Boolean,
+    evening: Boolean,
+    morningTime: String,
+    eveningTime: String,
+): String {
+    val parts = buildList {
+        if (morning) add("Morning ${formatTime(morningTime)}")
+        if (evening) add("Evening ${formatTime(eveningTime)}")
+    }
+    return parts.joinToString(" · ").ifEmpty { "Off" }
+}
+
+fun formatWeightReminder(enabled: Boolean, time: String): String =
+    if (enabled) "Morning ${formatTime(time.ifBlank { DEFAULT_WEIGHT_MORNING_REMINDER })}" else "Off"
+
+fun buildBloodPressureReport(
+    readings: List<BloodPressureReading>,
+    targetSystolic: Int?,
+    targetDiastolic: Int?,
+    generatedAt: String,
+    today: String = todayIso(),
+): String {
+    val last7 = bloodPressureInLastDays(readings, 7, today)
+    val last30 = bloodPressureInLastDays(readings, 30, today)
+    val summary7 = bloodPressureVisitSummary(readings, targetSystolic, targetDiastolic, today)
+    val mean30 = meanBloodPressure(last30)
+    val listed = if (last30.isNotEmpty()) last30.asReversed() else chronologicalBp(readings).takeLast(30).asReversed()
+    return buildString {
+        appendLine("Life Metric blood pressure report")
+        appendLine("Generated $generatedAt")
+        appendLine("This is a personal log, not a diagnosis.")
+        appendLine()
+        if (summary7 != null) {
+            appendLine("Last 7 days")
+            appendLine("Average ${summary7.meanSystolic} / ${summary7.meanDiastolic} mmHg${summary7.meanHeartRate?.let { " · $it bpm" }.orEmpty()}")
+            appendLine("7-day average is ${summary7.status.label} (${summary7.count} ${if (summary7.count == 1) "reading" else "readings"})")
+            summary7.morning?.let { appendLine("Morning average ${it.systolic} / ${it.diastolic} (${it.count})") }
+            summary7.evening?.let { appendLine("Evening average ${it.systolic} / ${it.diastolic} (${it.count})") }
+            if (last7.isNotEmpty()) {
+                appendLine("Min ${last7.minOf { it.systolic }}/${last7.minOf { it.diastolic }} · Max ${last7.maxOf { it.systolic }}/${last7.maxOf { it.diastolic }}")
+            }
+            summary7.target?.let {
+                appendLine("At or under ${it.targetSystolic} / ${it.targetDiastolic}: ${it.last7Met} of ${it.last7Total} in 7 days, ${it.last30Met} of ${it.last30Total} in 30 days")
+            }
+            appendLine()
+        }
+        if (mean30 != null && last30.size != last7.size) {
+            appendLine("Last 30 days")
+            appendLine("Average ${mean30.systolic} / ${mean30.diastolic} mmHg${mean30.heartRate?.let { " · $it bpm" }.orEmpty()} (${mean30.count} readings)")
+            appendLine()
+        }
+        appendLine("Readings")
+        if (listed.isEmpty()) {
+            appendLine("None")
+        } else {
+            listed.forEach { reading ->
+                val tags = formatBloodPressureTags(reading.tags)
+                val note = reading.note.trim()
+                append(reading.date)
+                append(' ')
+                append(reading.time)
+                append("  ")
+                append("${reading.systolic}/${reading.diastolic}")
+                reading.heartRate?.let { append("  ${it} bpm") }
+                append("  ")
+                append(bloodPressurePeriod(reading).label)
+                if (tags.isNotEmpty()) append("  $tags")
+                if (note.isNotEmpty()) append("  $note")
+                appendLine()
+            }
+        }
+    }.trimEnd()
+}
+
+fun buildBloodPressureCsv(readings: List<BloodPressureReading>): String {
+    val header = "date,time,systolic,diastolic,heartRate,period,tags,note"
+    val rows = chronologicalBp(readings).map { reading ->
+        listOf(
+            reading.date,
+            reading.time,
+            reading.systolic.toString(),
+            reading.diastolic.toString(),
+            reading.heartRate?.toString().orEmpty(),
+            bloodPressurePeriod(reading).id,
+            BloodPressureTag.parse(reading.tags).joinToString("|") { it.id },
+            csvEscape(reading.note.trim()),
+        ).joinToString(",")
+    }
+    return (listOf(header) + rows).joinToString("\n")
+}
+
+private fun csvEscape(value: String): String {
+    if (value.none { it == ',' || it == '"' || it == '\n' }) return value
+    return "\"${value.replace("\"", "\"\"")}\""
+}
+
+fun chartBloodPressure(readings: List<BloodPressureReading>, range: BloodPressureChartRange): List<BloodPressureReading> {
+    val chronological = chronologicalBp(readings)
+    val limit = range.limit ?: return chronological
+    return chronological.takeLast(limit)
+}
+
+data class BloodPressureTargetResult(
+    val systolic: Int? = null,
+    val diastolic: Int? = null,
+    val error: String? = null,
+) {
+    val ok: Boolean get() = error == null
+}
+
+fun validateBloodPressureTarget(systolicText: String, diastolicText: String): BloodPressureTargetResult {
+    val sysText = systolicText.trim()
+    val diaText = diastolicText.trim()
+    if (sysText.isEmpty() && diaText.isEmpty()) return BloodPressureTargetResult()
+    if (sysText.isEmpty() || diaText.isEmpty()) {
+        return BloodPressureTargetResult(error = "Enter both systolic and diastolic, or clear both to remove the target.")
+    }
+    val systolic = sysText.toIntOrNull()
+    val diastolic = diaText.toIntOrNull()
+    if (systolic == null || diastolic == null) {
+        return BloodPressureTargetResult(error = "Enter whole-number target values.")
+    }
+    if (systolic !in MIN_SYSTOLIC..MAX_SYSTOLIC) {
+        return BloodPressureTargetResult(error = "Systolic must be $MIN_SYSTOLIC–$MAX_SYSTOLIC.")
+    }
+    if (diastolic !in MIN_DIASTOLIC..MAX_DIASTOLIC) {
+        return BloodPressureTargetResult(error = "Diastolic must be $MIN_DIASTOLIC–$MAX_DIASTOLIC.")
+    }
+    if (diastolic >= systolic) {
+        return BloodPressureTargetResult(error = "Diastolic should be lower than systolic.")
+    }
+    return BloodPressureTargetResult(systolic, diastolic)
 }
 
 fun trailingMovingAverage(values: List<Double>, window: Int): List<Double> {
@@ -138,6 +758,294 @@ fun weightDelta(records: List<WeightRecord>): Double? {
     return sorted[0].weight - sorted[1].weight
 }
 
+data class WeightTrendPoint(
+    val day: DailyWeight,
+    val trendLb: Double,
+)
+
+/** Lowest scale reading on each calendar day, oldest first. */
+fun dailyWeights(records: List<WeightRecord>): List<DailyWeight> =
+    chronologicalWeights(records)
+        .groupBy { it.date }
+        .map { (date, dayRecords) ->
+            val lowest = dayRecords.minWith(compareBy<WeightRecord> { it.weight }.thenBy { it.time }.thenBy { it.id })
+            DailyWeight(date, lowest.weight, lowest.id)
+        }
+        .sortedBy { it.date }
+
+fun weightTrendSeries(
+    records: List<WeightRecord>,
+    window: Int = DEFAULT_WEIGHT_TREND_WINDOW,
+): List<WeightTrendPoint> {
+    val daily = dailyWeights(records)
+    val averages = trailingMovingAverage(daily.map { it.weight }, window)
+    return daily.mapIndexed { index, day -> WeightTrendPoint(day, averages[index]) }
+}
+
+fun latestWeightTrend(
+    records: List<WeightRecord>,
+    window: Int = DEFAULT_WEIGHT_TREND_WINDOW,
+): Double? = weightTrendSeries(records, window).lastOrNull()?.trendLb
+
+/**
+ * Change in the 7-day trend versus the trend from about [window] days earlier.
+ * Null until at least two daily points exist.
+ */
+fun weightTrendDelta(
+    records: List<WeightRecord>,
+    window: Int = DEFAULT_WEIGHT_TREND_WINDOW,
+    today: String = todayIso(),
+): Double? {
+    val series = weightTrendSeries(records, window)
+    if (series.size < 2) return null
+    val lastDate = parseIsoDate(series.last().day.date) ?: parseIsoDate(today) ?: return null
+    val target = lastDate.minusDays(window.toLong())
+    val priorIndex = series.indexOfLast { day ->
+        val date = parseIsoDate(day.day.date) ?: return@indexOfLast false
+        !date.isAfter(target)
+    }.takeIf { it >= 0 } ?: 0
+    if (priorIndex == series.lastIndex) return null
+    return roundToTenth(series.last().trendLb - series[priorIndex].trendLb)
+}
+
+fun formatWeightTrendDelta(deltaLb: Double, useKg: Boolean = false): String =
+    "${formatDelta(displayWeight(deltaLb, useKg), weightUnit(useKg))} vs 7-day trend"
+
+fun weightChartModel(
+    records: List<WeightRecord>,
+    range: WeightChartRange,
+    today: String = todayIso(),
+    window: Int = DEFAULT_WEIGHT_TREND_WINDOW,
+): WeightChartModel? {
+    val daily = dailyWeights(records)
+    if (daily.isEmpty()) return null
+    val todayDate = parseIsoDate(today) ?: return null
+    val lastDate = parseIsoDate(daily.last().date) ?: todayDate
+    val firstDate = parseIsoDate(daily.first().date) ?: lastDate
+    val end = if (range.days == null) lastDate else todayDate
+    val start = if (range.days == null) firstDate else end.minusDays((range.days - 1).toLong())
+    val trendByDate = weightTrendSeries(records, window).associate { it.day.date to it.trendLb }
+    val points = daily.filter { day ->
+        val date = parseIsoDate(day.date) ?: return@filter false
+        !date.isBefore(start) && !date.isAfter(end)
+    }
+    return WeightChartModel(
+        points = points,
+        startDate = start.toString(),
+        endDate = end.toString(),
+        trendByDate = trendByDate,
+    )
+}
+
+fun homeWeightChartModel(
+    records: List<WeightRecord>,
+    limit: Int = 10,
+    window: Int = DEFAULT_WEIGHT_TREND_WINDOW,
+): WeightChartModel? {
+    val daily = dailyWeights(records).takeLast(limit)
+    if (daily.isEmpty()) return null
+    return WeightChartModel(
+        points = daily,
+        startDate = daily.first().date,
+        endDate = daily.last().date,
+        trendByDate = weightTrendSeries(records, window).associate { it.day.date to it.trendLb },
+    )
+}
+
+fun weightWeeklyRate(
+    records: List<WeightRecord>,
+    lookbackDays: Int = WEIGHT_RATE_LOOKBACK_DAYS,
+    today: String = todayIso(),
+    window: Int = DEFAULT_WEIGHT_TREND_WINDOW,
+): WeightWeeklyRate? {
+    val series = weightTrendSeries(records, window)
+    if (series.size < 2) return null
+    val lastDate = parseIsoDate(series.last().day.date) ?: parseIsoDate(today) ?: return null
+    val target = lastDate.minusDays(lookbackDays.toLong())
+    val priorIndex = series.indexOfLast { day ->
+        val date = parseIsoDate(day.day.date) ?: return@indexOfLast false
+        !date.isAfter(target)
+    }.takeIf { it >= 0 } ?: 0
+    if (priorIndex == series.lastIndex) return null
+    val priorDate = parseIsoDate(series[priorIndex].day.date) ?: return null
+    val days = java.time.temporal.ChronoUnit.DAYS.between(priorDate, lastDate).toInt()
+    if (days < WEIGHT_RATE_MIN_DAYS) return null
+    val change = series.last().trendLb - series[priorIndex].trendLb
+    return WeightWeeklyRate(lbPerWeek = roundToTenth(change * 7.0 / days), days = days)
+}
+
+fun formatWeightWeeklyRate(rate: WeightWeeklyRate, useKg: Boolean = false): String =
+    "${formatDelta(displayWeight(rate.lbPerWeek, useKg), weightUnit(useKg))} / week"
+
+fun formatWeightRateCaption(days: Int): String =
+    "Over the last $days days of the 7-day trend. CDC suggests about 1–2 lb per week when losing."
+
+fun weightGoalEtaDate(
+    records: List<WeightRecord>,
+    startId: String?,
+    targetLb: Double?,
+    today: String = todayIso(),
+): String? {
+    val progress = weightGoalProgress(records, startId, targetLb) ?: return null
+    if (progress.kind == WeightGoalKind.Maintain) return null
+    val trend = latestWeightTrend(records) ?: return null
+    val rate = weightWeeklyRate(records, today = today) ?: return null
+    val remaining = when (progress.kind) {
+        WeightGoalKind.Lose -> trend - progress.targetLb
+        WeightGoalKind.Gain -> progress.targetLb - trend
+        WeightGoalKind.Maintain -> return null
+    }
+    if (remaining <= 0.05) return null
+    val toward = when (progress.kind) {
+        WeightGoalKind.Lose -> rate.lbPerWeek <= -WEIGHT_ETA_MIN_LB_PER_WEEK
+        WeightGoalKind.Gain -> rate.lbPerWeek >= WEIGHT_ETA_MIN_LB_PER_WEEK
+        WeightGoalKind.Maintain -> false
+    }
+    if (!toward) return null
+    val weeks = remaining / kotlin.math.abs(rate.lbPerWeek)
+    if (weeks > 52 * 5) return null
+    val start = parseIsoDate(today) ?: return null
+    return start.plusDays((weeks * 7.0).roundToInt().toLong()).toString()
+}
+
+fun formatWeightGoalEta(isoDate: String): String {
+    val formatted = runCatching {
+        LocalDate.parse(isoDate).format(DateTimeFormatter.ofPattern("MMM yyyy", Locale.getDefault()))
+    }.getOrDefault(isoDate)
+    return "At this rate, around $formatted."
+}
+
+fun tenPercentLossTarget(startLb: Double): Double = roundToTenth(startLb * 0.9)
+
+fun formatTenPercentGoalHint(startLb: Double, useKg: Boolean = false): String =
+    "10% of start is ${formatWeightWithUnit(tenPercentLossTarget(startLb), useKg)}"
+
+fun inferWeightTag(time: String): WeightTag? = when (inferBloodPressurePeriod(time)) {
+    BloodPressurePeriod.Morning -> WeightTag.Morning
+    BloodPressurePeriod.Evening -> WeightTag.Evening
+    BloodPressurePeriod.Other -> null
+}
+
+fun weightRecordTags(record: WeightRecord): List<WeightTag> {
+    val stored = WeightTag.parse(record.tags)
+    val hasPeriod = stored.any { it == WeightTag.Morning || it == WeightTag.Evening }
+    val inferred = if (hasPeriod) null else inferWeightTag(record.time)
+    return (stored + listOfNotNull(inferred)).distinct()
+}
+
+fun formatWeightTags(record: WeightRecord): String =
+    weightRecordTags(record).joinToString(", ") { it.label }
+
+fun formatWeightHistoryLine(record: WeightRecord): String {
+    val tags = formatWeightTags(record).takeIf { it.isNotEmpty() }
+    val note = record.note.trim().takeIf { it.isNotEmpty() }
+    return listOfNotNull("${formatDate(record.date)} · ${formatTime(record.time)}", tags, note)
+        .joinToString(" · ")
+}
+
+fun filterWeightRecords(
+    records: List<WeightRecord>,
+    range: WeightChartRange = WeightChartRange.All,
+    tags: Collection<String> = emptyList(),
+    today: String = todayIso(),
+): List<WeightRecord> {
+    val required = WeightTag.parse(tags.toList())
+    val inRange = weightRecordsInRange(records, range, today)
+    if (required.isEmpty()) return inRange
+    return inRange.filter { record ->
+        val present = weightRecordTags(record)
+        required.all { it in present }
+    }
+}
+
+fun weightRecordsInRange(
+    records: List<WeightRecord>,
+    range: WeightChartRange,
+    today: String = todayIso(),
+): List<WeightRecord> {
+    val model = weightChartModel(records, range, today) ?: return emptyList()
+    val start = parseIsoDate(model.startDate) ?: return records
+    val end = parseIsoDate(model.endDate) ?: return records
+    return records.filter { record ->
+        val date = parseIsoDate(record.date) ?: return@filter false
+        !date.isBefore(start) && !date.isAfter(end)
+    }
+}
+
+fun formatWaist(inches: Double?): String =
+    if (inches == null) "Not set" else "${formatWeight(inches)} in"
+
+fun formatWaistCaption(waistInches: Double?): String {
+    val yours = waistInches?.let { "Your waist is ${formatWeight(it)} in. " }.orEmpty()
+    return yours + "NHLBI high-risk cutoffs are above ${WAIST_HIGH_MEN_IN.toInt()} in for men and above ${WAIST_HIGH_WOMEN_IN.toInt()} in for women."
+}
+
+fun validateWaistInches(text: String): Pair<Double?, String?> {
+    val trimmed = text.trim()
+    if (trimmed.isEmpty()) return null to null
+    val parsed = trimmed.toDoubleOrNull() ?: return null to "Enter a waist measurement."
+    if (parsed < MIN_WAIST_IN || parsed > MAX_WAIST_IN) {
+        return null to "Waist must be ${MIN_WAIST_IN.toInt()}–${MAX_WAIST_IN.toInt()} in."
+    }
+    return roundToTenth(parsed) to null
+}
+
+fun buildWeightCsv(records: List<WeightRecord>): String {
+    val header = "date,time,weightLb,tags,note"
+    val rows = chronologicalWeights(records).map { record ->
+        listOf(
+            record.date,
+            record.time,
+            formatWeight(record.weight),
+            WeightTag.parse(record.tags).joinToString("|") { it.id },
+            csvEscape(record.note.trim()),
+        ).joinToString(",")
+    }
+    return (listOf(header) + rows).joinToString("\n")
+}
+
+fun buildWeightReport(
+    records: List<WeightRecord>,
+    generatedAt: String,
+): String = buildString {
+    appendLine("Life Metric weight log")
+    appendLine(generatedAt)
+    appendLine()
+    if (records.isEmpty()) {
+        appendLine("No readings in this range.")
+        return@buildString
+    }
+    appendLine("${records.size} reading${if (records.size == 1) "" else "s"}")
+    appendLine()
+    chronologicalWeights(records).forEach { record ->
+        append("${formatDate(record.date)} ${formatTime(record.time)}  ${formatWeight(record.weight)} lb")
+        val tags = formatWeightTags(record)
+        if (tags.isNotEmpty()) append("  $tags")
+        val note = record.note.trim()
+        if (note.isNotEmpty()) append("  $note")
+        appendLine()
+    }
+}
+
+private fun parseIsoDate(value: String): LocalDate? = runCatching { LocalDate.parse(value) }.getOrNull()
+
+fun weightChangeDirection(weight: Double, previous: Double?): WeightChangeDirection? {
+    if (previous == null) return null
+    val delta = weight - previous
+    return when {
+        kotlin.math.abs(delta) < WEIGHT_STABLE_LB -> WeightChangeDirection.Unchanged
+        delta > 0 -> WeightChangeDirection.Up
+        else -> WeightChangeDirection.Down
+    }
+}
+
+fun validateWeightLb(value: Double?): String? = when {
+    value == null -> "Enter a weight value."
+    value < MIN_WEIGHT_LB || value > MAX_WEIGHT_LB ->
+        "Weight must be ${MIN_WEIGHT_LB.toInt()}–${MAX_WEIGHT_LB.toInt()} lb."
+    else -> null
+}
+
 fun formatDelta(value: Double, unit: String): String {
     val sign = if (value > 0) "+" else ""
     return "$sign${String.format(Locale.US, "%.1f", value)} $unit"
@@ -163,7 +1071,38 @@ data class WeightGoalProgress(
     val targetToLoseLb: Double,
     val weightLostLb: Double,
     val percentComplete: Double,
+    val kind: WeightGoalKind,
 )
+
+fun weightGoalKind(startLb: Double, targetLb: Double): WeightGoalKind = when {
+    kotlin.math.abs(startLb - targetLb) < 0.05 -> WeightGoalKind.Maintain
+    startLb > targetLb -> WeightGoalKind.Lose
+    else -> WeightGoalKind.Gain
+}
+
+fun weightGoalTargetLabel(kind: WeightGoalKind): String = when (kind) {
+    WeightGoalKind.Lose -> "Target to lose"
+    WeightGoalKind.Gain -> "Target to gain"
+    WeightGoalKind.Maintain -> "Maintain"
+}
+
+fun weightGoalProgressLabel(kind: WeightGoalKind): String = when (kind) {
+    WeightGoalKind.Lose -> "Weight lost"
+    WeightGoalKind.Gain -> "Weight gained"
+    WeightGoalKind.Maintain -> "Distance from target"
+}
+
+fun WeightGoalProgress.targetChangeLb(): Double = when (kind) {
+    WeightGoalKind.Lose -> roundToTenth(startLb - targetLb)
+    WeightGoalKind.Gain -> roundToTenth(targetLb - startLb)
+    WeightGoalKind.Maintain -> roundToTenth(targetLb)
+}
+
+fun WeightGoalProgress.progressChangeLb(): Double = when (kind) {
+    WeightGoalKind.Lose -> roundToTenth(startLb - currentLb)
+    WeightGoalKind.Gain -> roundToTenth(currentLb - startLb)
+    WeightGoalKind.Maintain -> roundToTenth(kotlin.math.abs(currentLb - targetLb))
+}
 
 /**
  * Progress from a chosen starting reading toward the profile target, using the latest
@@ -191,6 +1130,7 @@ fun weightGoalProgress(
         targetToLoseLb = roundToTenth(start.weight - targetLb),
         weightLostLb = roundToTenth(start.weight - current),
         percentComplete = percent,
+        kind = weightGoalKind(start.weight, targetLb),
     )
 }
 
@@ -587,8 +1527,8 @@ fun validateProfile(
                 goalError = "Enter a weight value."
                 null
             }
-            parsed < 0 -> {
-                goalError = "Weight must be 0 or greater."
+            parsed < MIN_WEIGHT_LB || parsed > MAX_WEIGHT_LB -> {
+                goalError = "Weight must be ${MIN_WEIGHT_LB.toInt()}–${MAX_WEIGHT_LB.toInt()} lb."
                 null
             }
             else -> roundToTenth(parsed)

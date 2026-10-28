@@ -26,8 +26,13 @@ import com.markbriz.lifemetric.data.Machine
 import com.markbriz.lifemetric.data.ParsedAccountExport
 import com.markbriz.lifemetric.data.buildAccountExport
 import com.markbriz.lifemetric.data.parseAccountExport
+import com.markbriz.lifemetric.domain.formatBloodPressureReminders
+import com.markbriz.lifemetric.domain.formatBloodPressureTarget
 import com.markbriz.lifemetric.domain.formatHeight
-import com.markbriz.lifemetric.domain.formatWeight
+import com.markbriz.lifemetric.domain.formatWaist
+import com.markbriz.lifemetric.domain.formatWeightReminder
+import com.markbriz.lifemetric.domain.formatWeightWithUnit
+import com.markbriz.lifemetric.domain.weightUnit
 import com.markbriz.lifemetric.ui.components.AppScreen
 import com.markbriz.lifemetric.ui.components.ConfirmDeleteDialog
 import com.markbriz.lifemetric.ui.components.DangerOutlineButton
@@ -56,6 +61,11 @@ fun ProfileScreen(
     onHeight: () -> Unit,
     onGoal: () -> Unit,
     onBpWindow: () -> Unit,
+    onBpTarget: () -> Unit,
+    onBpReminders: () -> Unit,
+    onWeightReminders: () -> Unit,
+    onWeightUnits: () -> Unit,
+    onWaist: () -> Unit,
     onTheme: () -> Unit,
     onPlans: () -> Unit,
     /** Returns the current tracking data and the saved theme id for export. */
@@ -123,8 +133,9 @@ fun ProfileScreen(
     }
     var confirmErase by remember { mutableStateOf(false) }
     var confirmEraseAgain by remember { mutableStateOf(false) }
+    val useKg = store.profile.weightDisplayKg
     val start = store.weightRecords.find { it.id == store.profile.weightGoalStartId }
-    val startValue = start?.let { "${formatWeight(it.weight)} lb" } ?: "Not selected"
+    val startValue = start?.let { formatWeightWithUnit(it.weight, useKg) } ?: "Not selected"
 
     AppScreen(eyebrow = "App", title = "Profile", lead = "Height, goals, appearance, and data on this device.") {
         SectionTitle("Personal")
@@ -134,14 +145,49 @@ fun ProfileScreen(
             "Weight goal",
             "Target weight used on the Weight tab.",
             onGoal,
-            store.profile.weightGoalLb?.let { "${formatWeight(it)} lb" } ?: "Not set",
+            store.profile.weightGoalLb?.let { formatWeightWithUnit(it, useKg) } ?: "Not set",
         )
         SettingsRow("Starting weight", "The scale reading this goal starts from.", onGoal, startValue)
+        SettingsRow(
+            "Display units",
+            "How weight is shown. Stored values stay in pounds.",
+            onWeightUnits,
+            weightUnit(useKg),
+        )
+        SettingsRow(
+            "Waist",
+            "Optional NHLBI waist comparison. Sex is not recorded.",
+            onWaist,
+            formatWaist(store.profile.waistInches),
+        )
+        SettingsRow(
+            "Weight reminders",
+            "Optional local morning reminder to log a scale reading.",
+            onWeightReminders,
+            formatWeightReminder(store.profile.weightMorningReminder, store.profile.weightMorningReminderTime),
+        )
         SettingsRow(
             "BP average window",
             "How many recent readings the blood pressure chart averages.",
             onBpWindow,
             "${store.profile.bpMovingAverageReadings}",
+        )
+        SettingsRow(
+            "BP target",
+            "The numbers your clinician asked you to stay at or under.",
+            onBpTarget,
+            formatBloodPressureTarget(store.profile.bpTargetSystolic, store.profile.bpTargetDiastolic),
+        )
+        SettingsRow(
+            "BP reminders",
+            "Optional local morning and evening measurement reminders.",
+            onBpReminders,
+            formatBloodPressureReminders(
+                store.profile.bpMorningReminder,
+                store.profile.bpEveningReminder,
+                store.profile.bpMorningReminderTime,
+                store.profile.bpEveningReminderTime,
+            ),
         )
         SectionTitle("Appearance")
         SettingsRow("Theme", "Colors used across the app.", onTheme, themeById(themeId).label)

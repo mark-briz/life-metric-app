@@ -44,21 +44,31 @@ fun DateTimeFields(
             },
         ) { Text(if (date.isBlank()) "Date" else formatDate(date)) }
         if (showTime) {
-            OutlinedButton(
-                modifier = Modifier
-                    .weight(1f)
-                    .defaultMinSize(minHeight = 48.dp)
-                    .semantics { contentDescription = if (time.isBlank()) "Time" else "Time, ${formatTime(time)}" },
-                onClick = {
-                    val current = runCatching { LocalTime.parse(time) }.getOrElse { LocalTime.now() }
-                    TimePickerDialog(context, { _, hour, minute ->
-                        onTime("%02d:%02d".format(hour, minute))
-                    }, current.hour, current.minute, false).show()
-                },
-            ) { Text(if (time.isBlank()) "Time" else formatTime(time)) }
+            TimeField(time, onTime, Modifier.weight(1f))
         }
     }
     if (dateError != null || timeError != null) {
         Text(listOfNotNull(dateError, timeError).joinToString(" "))
     }
+}
+
+@Composable
+fun TimeField(
+    time: String,
+    onTime: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    label: String = "Time",
+) {
+    val context = LocalContext.current
+    OutlinedButton(
+        modifier = modifier
+            .defaultMinSize(minHeight = 48.dp)
+            .semantics { contentDescription = if (time.isBlank()) label else "$label, ${formatTime(time)}" },
+        onClick = {
+            val current = runCatching { LocalTime.parse(time) }.getOrElse { LocalTime.now() }
+            TimePickerDialog(context, { _, hour, minute ->
+                onTime("%02d:%02d".format(hour, minute))
+            }, current.hour, current.minute, false).show()
+        },
+    ) { Text(if (time.isBlank()) label else formatTime(time)) }
 }

@@ -238,6 +238,199 @@ class AccountExportTest {
     }
 
     @Test
+    fun bloodPressureHeartRateIsOptionalOnImport() {
+        val raw = """
+            {
+              "format": "life-metric-account",
+              "version": 1,
+              "exportedAt": "2026-10-12T12:00:00.000Z",
+              "themeId": "mint",
+              "data": {
+                "plans": [],
+                "workouts": [],
+                "weightRecords": [],
+                "bloodPressureReadings": [
+                  {"id":"bp-1","date":"2026-10-02","time":"08:16","systolic":118,"diastolic":76},
+                  {"id":"bp-2","date":"2026-10-03","time":"08:16","systolic":120,"diastolic":80,"heartRate":null}
+                ],
+                "profile": {"firstName":"Ada","lastName":"Lovelace"}
+              }
+            }
+        """.trimIndent()
+        val readings = parseAccountExport(raw).data.bloodPressureReadings.associateBy { it.id }
+        assertEquals(2, readings.size)
+        assertNull(readings.getValue("bp-1").heartRate)
+        assertNull(readings.getValue("bp-2").heartRate)
+        assertEquals(118, readings.getValue("bp-1").systolic)
+    }
+
+    @Test
+    fun bloodPressurePairAndTargetRoundTrip() {
+        val store = FitnessStore(
+            bloodPressureReadings = listOf(
+                BloodPressureReading(
+                    id = "bp-1",
+                    date = "2026-10-02",
+                    time = "08:16",
+                    systolic = 130,
+                    diastolic = 79,
+                    heartRate = 66,
+                    period = "morning",
+                    pairId = "pair-1",
+                    averagedFrom = listOf(
+                        com.markbriz.lifemetric.data.BloodPressureSample(128, 80, 64),
+                        com.markbriz.lifemetric.data.BloodPressureSample(132, 78, 68),
+                    ),
+                ),
+            ),
+            profile = UserProfile("Ada", "Lovelace", bpTargetSystolic = 130, bpTargetDiastolic = 80),
+        )
+        val parsed = parseAccountExport(buildAccountExport(store, "mint", "2026-10-12T12:00:00.000Z"))
+        val reading = parsed.data.bloodPressureReadings[0]
+        assertEquals("morning", reading.period)
+        assertEquals("pair-1", reading.pairId)
+        assertEquals(2, reading.averagedFrom.size)
+        assertEquals(128, reading.averagedFrom[0].systolic)
+        assertEquals(130, parsed.data.profile.bpTargetSystolic)
+        assertEquals(80, parsed.data.profile.bpTargetDiastolic)
+    }
+
+    @Test
+    fun bloodPressureTagsNotesAndRemindersRoundTrip() {
+        val store = FitnessStore(
+            bloodPressureReadings = listOf(
+                BloodPressureReading(
+                    id = "bp-1",
+                    date = "2026-10-02",
+                    time = "08:16",
+                    systolic = 118,
+                    diastolic = 76,
+                    tags = listOf("left_arm", "after_caffeine"),
+                    note = "after walk",
+                ),
+            ),
+            profile = UserProfile(
+                firstName = "Ada",
+                lastName = "Lovelace",
+                bpMorningReminder = true,
+                bpEveningReminder = true,
+                bpMorningReminderTime = "06:30",
+                bpEveningReminderTime = "20:15",
+                weightMorningReminder = true,
+                weightMorningReminderTime = "06:45",
+            ),
+        )
+        val parsed = parseAccountExport(buildAccountExport(store, "mint", "2026-10-12T12:00:00.000Z"))
+        val reading = parsed.data.bloodPressureReadings[0]
+        assertEquals(listOf("left_arm", "after_caffeine"), reading.tags)
+        assertEquals("after walk", reading.note)
+        assertTrue(parsed.data.profile.bpMorningReminder)
+        assertTrue(parsed.data.profile.bpEveningReminder)
+        assertEquals("06:30", parsed.data.profile.bpMorningReminderTime)
+        assertEquals("20:15", parsed.data.profile.bpEveningReminderTime)
+        assertTrue(parsed.data.profile.weightMorningReminder)
+        assertEquals("06:45", parsed.data.profile.weightMorningReminderTime)
+    }
+
+    @Test
+    fun olderBloodPressureJsonKeepsEmptyTagsAndRemindersOff() {
+        val raw = """
+            {
+              "format": "life-metric-account",
+              "version": 1,
+              "exportedAt": "2026-10-12T12:00:00.000Z",
+              "themeId": "mint",
+              "data": {
+                "plans": [],
+                "workouts": [],
+                "weightRecords": [],
+                "bloodPressureReadings": [
+                  {"id":"bp-1","date":"2026-10-02","time":"08:16","systolic":118,"diastolic":76}
+                ],
+                "profile": {"firstName":"Ada","lastName":"Lovelace","heightInches":65}
+              }
+            }
+        """.trimIndent()
+        val parsed = parseAccountExport(raw)
+        assertEquals(emptyList<String>(), parsed.data.bloodPressureReadings[0].tags)
+        assertEquals("", parsed.data.bloodPressureReadings[0].note)
+        assertEquals(false, parsed.data.profile.bpMorningReminder)
+        assertEquals(false, parsed.data.profile.bpEveningReminder)
+        assertEquals("07:00", parsed.data.profile.bpMorningReminderTime)
+        assertEquals("19:00", parsed.data.profile.bpEveningReminderTime)
+        assertEquals(false, parsed.data.profile.weightMorningReminder)
+        assertEquals("07:00", parsed.data.profile.weightMorningReminderTime)
+        assertEquals(false, parsed.data.profile.weightDisplayKg)
+        assertNull(parsed.data.profile.waistInches)
+    }
+
+    @Test
+    fun weightTagsUnitsAndWaistRoundTrip() {
+        val store = FitnessStore(
+            weightRecords = listOf(
+                WeightRecord(
+                    id = "bw-1",
+                    date = "2026-10-02",
+                    time = "08:15",
+                    weight = 180.2,
+                    tags = listOf("morning", "travel"),
+                    note = "hotel scale",
+                ),
+            ),
+            profile = UserProfile(
+                firstName = "Ada",
+                lastName = "Lovelace",
+                weightDisplayKg = true,
+                waistInches = 34.5,
+            ),
+        )
+        val parsed = parseAccountExport(buildAccountExport(store, "mint", "2026-10-12T12:00:00.000Z"))
+        val record = parsed.data.weightRecords[0]
+        assertEquals(listOf("morning", "travel"), record.tags)
+        assertEquals("hotel scale", record.note)
+        assertTrue(parsed.data.profile.weightDisplayKg)
+        assertEquals(34.5, parsed.data.profile.waistInches)
+    }
+
+    @Test
+    fun olderWeightJsonKeepsEmptyTagsAndNoWaist() {
+        val raw = """
+            {
+              "format": "life-metric-account",
+              "version": 1,
+              "exportedAt": "2026-10-12T12:00:00.000Z",
+              "themeId": "mint",
+              "data": {
+                "plans": [],
+                "workouts": [],
+                "weightRecords": [
+                  {"id":"11111111-1111-4111-8111-111111111111","date":"2026-10-02","time":"08:15","weight":180.2}
+                ],
+                "bloodPressureReadings": [],
+                "profile": {"firstName":"Ada","lastName":"Lovelace","heightInches":65,"waistInches":90}
+              }
+            }
+        """.trimIndent()
+        val parsed = parseAccountExport(raw)
+        assertEquals(emptyList<String>(), parsed.data.weightRecords[0].tags)
+        assertEquals("", parsed.data.weightRecords[0].note)
+        assertEquals(false, parsed.data.profile.weightDisplayKg)
+        assertNull(parsed.data.profile.waistInches)
+    }
+
+    @Test
+    fun bloodPressureWithoutHeartRateRoundTrips() {
+        val store = FitnessStore(
+            bloodPressureReadings = listOf(BloodPressureReading("bp-1", "2026-10-02", "08:16", 118, 76, null)),
+            profile = UserProfile("Ada", "Lovelace"),
+        )
+        val parsed = parseAccountExport(buildAccountExport(store, "mint", "2026-10-12T12:00:00.000Z"))
+        assertEquals(1, parsed.data.bloodPressureReadings.size)
+        assertNull(parsed.data.bloodPressureReadings[0].heartRate)
+        assertEquals(118, parsed.data.bloodPressureReadings[0].systolic)
+    }
+
+    @Test
     fun acceptsRawTrackingBlob() {
         val data = Json.parseToJsonElement(expoFile).jsonObject["data"]!!.toString()
         val parsed = parseAccountExport(data)

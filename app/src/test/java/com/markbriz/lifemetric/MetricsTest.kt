@@ -1,10 +1,77 @@
 package com.markbriz.lifemetric
 
+import com.markbriz.lifemetric.domain.BloodPressureChartRange
+import com.markbriz.lifemetric.domain.BloodPressurePeriod
+import com.markbriz.lifemetric.domain.averageBloodPressureSamples
+import com.markbriz.lifemetric.domain.bloodPressureDelta
+import com.markbriz.lifemetric.domain.bloodPressureGaugeProgress
+import com.markbriz.lifemetric.domain.bloodPressureInLastDays
+import com.markbriz.lifemetric.domain.bloodPressureLowHint
+import com.markbriz.lifemetric.domain.bloodPressurePeriod
+import com.markbriz.lifemetric.domain.bloodPressureSaveHint
+import com.markbriz.lifemetric.domain.bloodPressureSaveWarning
 import com.markbriz.lifemetric.domain.bloodPressureStatus
+import com.markbriz.lifemetric.domain.bloodPressureVisitSummary
 import com.markbriz.lifemetric.domain.BpStatus
+import com.markbriz.lifemetric.domain.BloodPressureTag
+import com.markbriz.lifemetric.domain.buildBloodPressureCsv
+import com.markbriz.lifemetric.domain.buildBloodPressureReport
+import com.markbriz.lifemetric.domain.chartBloodPressure
+import com.markbriz.lifemetric.domain.filterBloodPressureReadings
+import com.markbriz.lifemetric.domain.formatBloodPressureHistoryLine
+import com.markbriz.lifemetric.domain.formatBloodPressureReminders
+import com.markbriz.lifemetric.domain.formatBloodPressureTags
+import com.markbriz.lifemetric.domain.formatVisitSummaryLine
+import com.markbriz.lifemetric.domain.inferBloodPressurePeriod
+import com.markbriz.lifemetric.domain.isolatedBloodPressureNote
+import com.markbriz.lifemetric.domain.meetsBloodPressureTarget
+import com.markbriz.lifemetric.domain.validateBloodPressureTarget
+import com.markbriz.lifemetric.data.BloodPressureSample
 import com.markbriz.lifemetric.domain.calculateBmi
+import com.markbriz.lifemetric.domain.formatBloodPressure
+import com.markbriz.lifemetric.domain.formatBloodPressureDelta
+import com.markbriz.lifemetric.domain.formatDerivedBloodPressure
+import com.markbriz.lifemetric.domain.formatPreviousBloodPressure
+import com.markbriz.lifemetric.domain.meanArterialPressure
+import com.markbriz.lifemetric.domain.pulsePressure
+import com.markbriz.lifemetric.domain.validateBloodPressureReading
+import com.markbriz.lifemetric.data.BloodPressureReading
 import com.markbriz.lifemetric.domain.bmiCategory
 import com.markbriz.lifemetric.domain.BmiCategory
+import com.markbriz.lifemetric.domain.formatBmiCaption
+import com.markbriz.lifemetric.domain.latestWeightTrend
+import com.markbriz.lifemetric.domain.progressChangeLb
+import com.markbriz.lifemetric.domain.targetChangeLb
+import com.markbriz.lifemetric.domain.validateWeightLb
+import com.markbriz.lifemetric.domain.weightChangeDirection
+import com.markbriz.lifemetric.domain.WeightChangeDirection
+import com.markbriz.lifemetric.domain.weightGoalKind
+import com.markbriz.lifemetric.domain.WeightGoalKind
+import com.markbriz.lifemetric.domain.weightTrendDelta
+import com.markbriz.lifemetric.domain.WeightChartRange
+import com.markbriz.lifemetric.domain.dailyWeights
+import com.markbriz.lifemetric.domain.formatTenPercentGoalHint
+import com.markbriz.lifemetric.domain.formatWeightGoalEta
+import com.markbriz.lifemetric.domain.formatWeightReminder
+import com.markbriz.lifemetric.domain.homeWeightChartModel
+import com.markbriz.lifemetric.domain.tenPercentLossTarget
+import com.markbriz.lifemetric.domain.weightChartModel
+import com.markbriz.lifemetric.domain.weightGoalEtaDate
+import com.markbriz.lifemetric.domain.weightWeeklyRate
+import com.markbriz.lifemetric.domain.WeightTag
+import com.markbriz.lifemetric.domain.buildWeightCsv
+import com.markbriz.lifemetric.domain.buildWeightReport
+import com.markbriz.lifemetric.domain.displayWeight
+import com.markbriz.lifemetric.domain.filterWeightRecords
+import com.markbriz.lifemetric.domain.formatWaistCaption
+import com.markbriz.lifemetric.domain.formatWeightHistoryLine
+import com.markbriz.lifemetric.domain.formatWeightTags
+import com.markbriz.lifemetric.domain.formatWeightWithUnit
+import com.markbriz.lifemetric.domain.inferWeightTag
+import com.markbriz.lifemetric.domain.parseWeightInput
+import com.markbriz.lifemetric.domain.stepDisplayedWeight
+import com.markbriz.lifemetric.domain.validateWaistInches
+import com.markbriz.lifemetric.domain.weightRecordTags
 import com.markbriz.lifemetric.domain.emptyWorkoutEntry
 import com.markbriz.lifemetric.domain.findPreviousLoad
 import com.markbriz.lifemetric.domain.formatPreviousLoadSuggestion
@@ -59,6 +126,255 @@ class MetricsTest {
         assertEquals("130–139 or 80–89", BpStatus.Stage1.range)
         assertEquals("140 or higher or 90 or higher", BpStatus.Stage2.range)
         assertEquals("Higher than 180 and/or higher than 120", BpStatus.Severe.range)
+    }
+
+    @Test
+    fun pulsePressureAndMapUseStandardFormulas() {
+        assertEquals(42, pulsePressure(118, 76))
+        assertEquals(90, meanArterialPressure(118, 76))
+        assertEquals("PP 42 · MAP 90", formatDerivedBloodPressure(118, 76))
+        assertEquals("118 / 76 mmHg", formatBloodPressure(118, 76, null))
+        assertEquals("118 / 76 mmHg · 64 bpm", formatBloodPressure(118, 76, 64))
+        assertEquals("Last time: 128 / 78 · 64 bpm.", formatPreviousBloodPressure(128, 78, 64))
+        assertEquals("Last time: 128 / 78.", formatPreviousBloodPressure(128, 78, null))
+    }
+
+    @Test
+    fun bloodPressureDeltaUsesNewestThenPrevious() {
+        val readings = listOf(
+            BloodPressureReading("bp-1", "2026-10-01", "08:00", 120, 80, 60),
+            BloodPressureReading("bp-2", "2026-10-02", "08:00", 126, 82, null),
+        )
+        val delta = bloodPressureDelta(readings)
+        assertEquals(6, delta?.systolic)
+        assertEquals(2, delta?.diastolic)
+        assertEquals("+6 / +2 mmHg vs prior", formatBloodPressureDelta(delta!!))
+        assertEquals(
+            "No change vs prior",
+            formatBloodPressureDelta(com.markbriz.lifemetric.domain.BloodPressureDelta(0, 0)),
+        )
+        assertNull(bloodPressureDelta(readings.take(1)))
+    }
+
+    @Test
+    fun bloodPressureValidationAcceptsOptionalHeartRate() {
+        val ok = validateBloodPressureReading("2026-10-02", "08:16", "118", "76", "")
+        assertTrue(ok.ok)
+        assertEquals(118, ok.systolic)
+        assertEquals(76, ok.diastolic)
+        assertNull(ok.heartRate)
+        assertTrue(ok.errors.isEmpty())
+
+        val withHr = validateBloodPressureReading("2026-10-02", "08:16", "118", "76", "64")
+        assertEquals(64, withHr.heartRate)
+
+        val low = validateBloodPressureReading("2026-10-02", "08:16", "40", "20", "10")
+        assertEquals("Systolic must be 50–250.", low.errors["systolic"])
+        assertEquals("Diastolic must be 30–150.", low.errors["diastolic"])
+        assertEquals("Heart rate must be 30–220.", low.errors["heartRate"])
+
+        val inverted = validateBloodPressureReading("2026-10-02", "08:16", "110", "120", "")
+        assertEquals("Diastolic should be lower than systolic.", inverted.errors["diastolic"])
+    }
+
+    @Test
+    fun saveWarningCoversSevereAndWidePulsePressure() {
+        assertNull(bloodPressureSaveHint(118, 76))
+        assertTrue(bloodPressureSaveHint(181, 90)!!.contains("Severe Hypertension"))
+        assertTrue(bloodPressureSaveHint(160, 70)!!.contains("Pulse pressure is 90"))
+        assertTrue(bloodPressureSaveWarning(181, 90)!!.contains("Save it anyway?"))
+        assertTrue(bloodPressureSaveWarning(160, 70)!!.contains("Save this reading?"))
+    }
+
+    @Test
+    fun gaugeFollowsCategoryNotSystolicAlone() {
+        assertEquals(BpStatus.Stage1, bloodPressureStatus(118, 82))
+        assertEquals(BpStatus.Normal, bloodPressureStatus(118, 76))
+        val diastolicStage1 = bloodPressureGaugeProgress(118, 82)
+        val normal = bloodPressureGaugeProgress(118, 76)
+        val systolicStage2 = bloodPressureGaugeProgress(148, 72)
+        assertTrue(diastolicStage1 > 0f)
+        assertTrue(normal > 0f)
+        assertTrue(systolicStage2 > 0f)
+        assertEquals(BpStatus.Stage2, bloodPressureStatus(148, 72))
+    }
+
+    @Test
+    fun morningEveningComeFromTimeUnlessOverridden() {
+        assertEquals(BloodPressurePeriod.Morning, inferBloodPressurePeriod("07:14"))
+        assertEquals(BloodPressurePeriod.Other, inferBloodPressurePeriod("13:00"))
+        assertEquals(BloodPressurePeriod.Evening, inferBloodPressurePeriod("18:30"))
+        val inferred = BloodPressureReading("bp-1", "2026-10-27", "07:14", 118, 76)
+        val evening = inferred.copy(period = "evening")
+        assertEquals(BloodPressurePeriod.Morning, bloodPressurePeriod(inferred))
+        assertEquals(BloodPressurePeriod.Evening, bloodPressurePeriod(evening))
+    }
+
+    @Test
+    fun pairAverageUsesBothCuffReadings() {
+        val average = averageBloodPressureSamples(
+            listOf(
+                BloodPressureSample(128, 80, 64),
+                BloodPressureSample(132, 78, 68),
+            ),
+        )
+        assertEquals(130, average?.systolic)
+        assertEquals(79, average?.diastolic)
+        assertEquals(66, average?.heartRate)
+    }
+
+    @Test
+    fun visitSummaryUsesSevenDayAverageNotASingleReading() {
+        val readings = listOf(
+            BloodPressureReading("bp-old", "2026-10-01", "08:00", 160, 100, period = "morning"),
+            BloodPressureReading("bp-am", "2026-10-26", "08:00", 128, 82, 60, period = "morning"),
+            BloodPressureReading("bp-pm", "2026-10-26", "18:00", 118, 74, 58, period = "evening"),
+            BloodPressureReading("bp-today", "2026-10-27", "08:00", 124, 80, period = "morning"),
+        )
+        assertEquals(3, bloodPressureInLastDays(readings, 7, "2026-10-27").size)
+        val summary = bloodPressureVisitSummary(readings, 130, 80, "2026-10-27")
+        assertEquals(3, summary?.count)
+        assertEquals(123, summary?.meanSystolic)
+        assertEquals(79, summary?.meanDiastolic)
+        assertEquals(BpStatus.Elevated, summary?.status)
+        assertEquals(126, summary?.morning?.systolic)
+        assertEquals(118, summary?.evening?.systolic)
+        assertEquals(2, summary?.target?.last7Met)
+        assertEquals(3, summary?.target?.last7Total)
+        assertTrue(formatVisitSummaryLine(summary!!).startsWith("7-day average is Elevated"))
+        assertTrue(meetsBloodPressureTarget(readings[3], 130, 80))
+        assertEquals(4, chartBloodPressure(readings, BloodPressureChartRange.Last7).size)
+        assertEquals(4, chartBloodPressure(readings, BloodPressureChartRange.All).size)
+    }
+
+    @Test
+    fun lowHintDoesNotInventACategory() {
+        assertEquals(BpStatus.Normal, bloodPressureStatus(88, 58))
+        assertEquals(
+            "This is lower than the usual adult range. The AHA chart is for high blood pressure.",
+            bloodPressureLowHint(88, 58),
+        )
+        assertEquals(
+            "This is lower than the usual adult range. The AHA chart is for high blood pressure.",
+            bloodPressureLowHint(88, 70),
+        )
+        assertEquals(
+            "This is lower than the usual adult range. The AHA chart is for high blood pressure.",
+            bloodPressureLowHint(100, 55),
+        )
+        assertNull(bloodPressureLowHint(118, 76))
+    }
+
+    @Test
+    fun isolatedNoteOnlyWhenOneNumberDrivesTheCategory() {
+        assertEquals(
+            "Systolic is in Stage 2 Hypertension; diastolic is not.",
+            isolatedBloodPressureNote(148, 72),
+        )
+        assertEquals(
+            "Diastolic is in Stage 1 Hypertension; systolic is not.",
+            isolatedBloodPressureNote(118, 82),
+        )
+        assertNull(isolatedBloodPressureNote(140, 90))
+        assertNull(isolatedBloodPressureNote(118, 76))
+    }
+
+    @Test
+    fun tagsAndPeriodFiltersAreAnd() {
+        val leftMorning = BloodPressureReading(
+            "bp-1",
+            "2026-10-27",
+            "08:00",
+            118,
+            76,
+            period = "morning",
+            tags = listOf(BloodPressureTag.LeftArm.id),
+        )
+        val leftEvening = BloodPressureReading(
+            "bp-2",
+            "2026-10-27",
+            "18:00",
+            122,
+            78,
+            period = "evening",
+            tags = listOf(BloodPressureTag.LeftArm.id, BloodPressureTag.AfterCaffeine.id),
+            note = "coffee",
+        )
+        val rightMorning = BloodPressureReading(
+            "bp-3",
+            "2026-10-27",
+            "07:30",
+            124,
+            80,
+            period = "morning",
+            tags = listOf(BloodPressureTag.RightArm.id),
+        )
+        val readings = listOf(leftMorning, leftEvening, rightMorning)
+        assertEquals(
+            listOf(leftMorning),
+            filterBloodPressureReadings(readings, BloodPressurePeriod.Morning, listOf(BloodPressureTag.LeftArm.id)),
+        )
+        assertEquals(2, filterBloodPressureReadings(readings, tags = listOf(BloodPressureTag.LeftArm.id)).size)
+        assertEquals(
+            listOf(leftEvening),
+            filterBloodPressureReadings(readings, tags = listOf(BloodPressureTag.LeftArm.id, BloodPressureTag.AfterCaffeine.id)),
+        )
+        assertEquals("Left arm, After caffeine", formatBloodPressureTags(leftEvening.tags))
+        assertTrue(formatBloodPressureHistoryLine(leftEvening).contains("coffee"))
+        assertTrue(formatBloodPressureHistoryLine(leftEvening).contains("Left arm"))
+    }
+
+    @Test
+    fun clinicianReportIncludesAveragesAndTags() {
+        val readings = listOf(
+            BloodPressureReading(
+                "bp-am",
+                "2026-10-26",
+                "08:00",
+                128,
+                82,
+                60,
+                period = "morning",
+                tags = listOf(BloodPressureTag.LeftArm.id),
+                note = "before meds",
+            ),
+            BloodPressureReading("bp-pm", "2026-10-26", "18:00", 118, 74, 58, period = "evening"),
+        )
+        val report = buildBloodPressureReport(readings, 130, 80, "Oct 27, 2026", "2026-10-27")
+        assertTrue(report.contains("Last 7 days"))
+        assertTrue(report.contains("Morning average"))
+        assertTrue(report.contains("Evening average"))
+        assertTrue(report.contains("Left arm"))
+        assertTrue(report.contains("before meds"))
+        assertTrue(report.contains("This is a personal log, not a diagnosis."))
+        val csv = buildBloodPressureCsv(readings)
+        assertTrue(csv.startsWith("date,time,systolic,diastolic,heartRate,period,tags,note"))
+        assertTrue(csv.contains("left_arm"))
+        assertTrue(csv.contains("before meds"))
+        val escaped = buildBloodPressureCsv(
+            listOf(readings[0].copy(note = "felt tired, after walk")),
+        )
+        assertTrue(escaped.contains("\"felt tired, after walk\""))
+    }
+
+    @Test
+    fun reminderSummaryIsOffUntilEnabled() {
+        assertEquals("Off", formatBloodPressureReminders(false, false, "07:00", "19:00"))
+        val both = formatBloodPressureReminders(true, true, "07:00", "19:00")
+        assertTrue(both.contains("Morning"))
+        assertTrue(both.contains("Evening"))
+    }
+
+    @Test
+    fun bloodPressureTargetAllowsClearing() {
+        val empty = validateBloodPressureTarget("", "")
+        assertTrue(empty.ok)
+        assertNull(empty.systolic)
+        val partial = validateBloodPressureTarget("130", "")
+        assertEquals("Enter both systolic and diastolic, or clear both to remove the target.", partial.error)
+        val ok = validateBloodPressureTarget("130", "80")
+        assertEquals(130, ok.systolic)
+        assertEquals(80, ok.diastolic)
     }
 
     @Test
@@ -305,6 +621,9 @@ class MetricsTest {
         assertEquals(10.0, progress.targetToLoseLb, 0.0)
         assertEquals(4.0, progress.weightLostLb, 0.0)
         assertEquals(40.0, progress.percentComplete, 0.01)
+        assertEquals(WeightGoalKind.Lose, progress.kind)
+        assertEquals(10.0, progress.targetChangeLb(), 0.0)
+        assertEquals(4.0, progress.progressChangeLb(), 0.0)
     }
 
     @Test
@@ -340,6 +659,215 @@ class MetricsTest {
         assertNull(weightGoalProgress(listOf(record), null, 170.0))
         assertNull(weightGoalProgress(listOf(record), "missing", 170.0))
         assertNull(weightGoalProgress(listOf(record), "w1", null))
+    }
+
+    @Test
+    fun bmiUsesObesityClassesAndKeepsOverweightBoundary() {
+        assertEquals(BmiCategory.Over, bmiCategory(calculateBmi(182.3, 70)))
+        assertEquals(BmiCategory.Obese1, bmiCategory(30.0))
+        assertEquals(BmiCategory.Obese2, bmiCategory(35.0))
+        assertEquals(BmiCategory.Obese3, bmiCategory(42.0))
+        assertEquals("Overweight · CDC adult screening", formatBmiCaption(calculateBmi(182.3, 70), compact = false))
+        assertEquals("Class 3 · CDC adult screening", formatBmiCaption(42.0, compact = true))
+    }
+
+    @Test
+    fun weightTrendIgnoresALateRawSpike() {
+        val declining = (1..13).map { day ->
+            WeightRecord("w$day", "2026-10-${day.toString().padStart(2, '0')}", "08:00", 185.0 - day * 0.3)
+        }
+        val spiked = WeightRecord("w14", "2026-10-14", "20:00", declining.last().weight + 2.0)
+        val records = declining + spiked
+        val priorRaw = declining.last().weight
+        assertTrue(spiked.weight > priorRaw)
+        val delta = weightTrendDelta(records)!!
+        assertTrue(delta < 0.0)
+        assertTrue(latestWeightTrend(records)!! < spiked.weight)
+    }
+
+    @Test
+    fun weightChangeUnderHalfPoundIsUnchanged() {
+        assertEquals(WeightChangeDirection.Unchanged, weightChangeDirection(180.2, 180.0))
+        assertEquals(WeightChangeDirection.Up, weightChangeDirection(180.6, 180.0))
+        assertEquals(WeightChangeDirection.Down, weightChangeDirection(179.4, 180.0))
+        assertNull(weightChangeDirection(180.0, null))
+    }
+
+    @Test
+    fun weightValidationRejectsEmptyAndOutOfRange() {
+        assertEquals("Enter a weight value.", validateWeightLb(null))
+        assertEquals("Weight must be 50–700 lb.", validateWeightLb(0.0))
+        assertEquals("Weight must be 50–700 lb.", validateWeightLb(49.9))
+        assertEquals("Weight must be 50–700 lb.", validateWeightLb(700.1))
+        assertNull(validateWeightLb(50.0))
+        assertNull(validateWeightLb(182.3))
+        val tooLow = validateProfile("5", "10", "20", 10)
+        assertEquals("Weight must be 50–700 lb.", tooLow.weightGoalError)
+    }
+
+    @Test
+    fun weightGoalCopyFollowsLoseGainOrMaintain() {
+        assertEquals(WeightGoalKind.Lose, weightGoalKind(180.0, 170.0))
+        assertEquals(WeightGoalKind.Gain, weightGoalKind(140.0, 155.0))
+        assertEquals(WeightGoalKind.Maintain, weightGoalKind(170.0, 170.0))
+        val gain = weightGoalProgress(
+            listOf(WeightRecord("start", "2026-09-01", "08:00", 140.0), WeightRecord("now", "2026-10-19", "08:00", 146.0)),
+            "start",
+            155.0,
+        )!!
+        assertEquals(WeightGoalKind.Gain, gain.kind)
+        assertEquals(15.0, gain.targetChangeLb(), 0.0)
+        assertEquals(6.0, gain.progressChangeLb(), 0.0)
+        val hold = weightGoalProgress(
+            listOf(WeightRecord("start", "2026-09-01", "08:00", 170.0), WeightRecord("now", "2026-10-19", "08:00", 171.2)),
+            "start",
+            170.0,
+        )!!
+        assertEquals(WeightGoalKind.Maintain, hold.kind)
+        assertEquals(1.2, hold.progressChangeLb(), 0.0)
+    }
+
+    @Test
+    fun dailyWeightKeepsTheLowestReadingOfTheDay() {
+        val records = listOf(
+            WeightRecord("am", "2026-10-12", "07:10", 181.4),
+            WeightRecord("pm", "2026-10-12", "20:40", 184.1),
+            WeightRecord("next", "2026-10-13", "07:05", 180.8),
+        )
+        val daily = dailyWeights(records)
+        assertEquals(2, daily.size)
+        assertEquals(181.4, daily[0].weight, 0.0)
+        assertEquals("am", daily[0].sourceId)
+        assertEquals(180.8, daily[1].weight, 0.0)
+    }
+
+    @Test
+    fun weightChartUsesCalendarSpanNotReadingIndex() {
+        val records = listOf(
+            WeightRecord("a", "2026-09-27", "08:00", 180.0),
+            WeightRecord("b", "2026-10-27", "08:00", 176.0),
+        )
+        val all = weightChartModel(records, WeightChartRange.All, today = "2026-10-27")!!
+        assertEquals("2026-09-27", all.startDate)
+        assertEquals("2026-10-27", all.endDate)
+        assertEquals(2, all.points.size)
+        val last30 = weightChartModel(records, WeightChartRange.Last30, today = "2026-10-27")!!
+        assertEquals("2026-09-28", last30.startDate)
+        assertEquals("2026-10-27", last30.endDate)
+        assertEquals(listOf("b"), last30.points.map { it.sourceId })
+        val home = homeWeightChartModel(records)!!
+        assertEquals("2026-09-27", home.startDate)
+        assertEquals("2026-10-27", home.endDate)
+    }
+
+    @Test
+    fun weightWeeklyRateAndEtaFollowTheTrend() {
+        val records = (0..28).map { day ->
+            val date = java.time.LocalDate.parse("2026-09-29").plusDays(day.toLong()).toString()
+            WeightRecord("w$day", date, "08:00", 180.0 - day * (1.0 / 7.0))
+        }
+        val rate = weightWeeklyRate(records, today = "2026-10-27")!!
+        assertEquals(-1.0, rate.lbPerWeek, 0.15)
+        assertTrue(rate.days >= 7)
+        val eta = weightGoalEtaDate(records, "w0", 170.0, today = "2026-10-27")
+        assertTrue(eta != null)
+        val etaDate = java.time.LocalDate.parse(eta!!)
+        assertTrue(!etaDate.isBefore(java.time.LocalDate.parse("2026-11-15")))
+        assertTrue(etaDate.isBefore(java.time.LocalDate.parse("2027-03-01")))
+        assertTrue(formatWeightGoalEta(eta).startsWith("At this rate, around "))
+        val plateau = listOf(
+            WeightRecord("a", "2026-10-01", "08:00", 180.0),
+            WeightRecord("b", "2026-10-28", "08:00", 180.1),
+        )
+        assertNull(weightGoalEtaDate(plateau, "a", 170.0, today = "2026-10-28"))
+    }
+
+    @Test
+    fun tenPercentGoalAndReminderCopy() {
+        assertEquals(162.0, tenPercentLossTarget(180.0), 0.0)
+        assertEquals("10% of start is 162.0 lb", formatTenPercentGoalHint(180.0))
+        assertEquals("Off", formatWeightReminder(false, "07:00"))
+        assertTrue(formatWeightReminder(true, "07:00").startsWith("Morning"))
+        assertEquals("10% of start is 73.5 kg", formatTenPercentGoalHint(180.0, useKg = true))
+    }
+
+    @Test
+    fun weightTagsInferMorningAndEveningFromTime() {
+        assertEquals(WeightTag.Morning, inferWeightTag("08:15"))
+        assertEquals(WeightTag.Evening, inferWeightTag("20:40"))
+        assertNull(inferWeightTag("13:10"))
+        val morning = WeightRecord("am", "2026-10-12", "07:10", 181.4)
+        val tagged = WeightRecord("pm", "2026-10-12", "20:40", 184.1, tags = listOf(WeightTag.Travel.id), note = "hotel scale")
+        assertEquals(listOf(WeightTag.Morning), weightRecordTags(morning))
+        assertEquals(listOf(WeightTag.Travel, WeightTag.Evening), weightRecordTags(tagged))
+        assertEquals("Travel, Evening", formatWeightTags(tagged))
+        assertTrue(formatWeightHistoryLine(tagged).contains("hotel scale"))
+    }
+
+    @Test
+    fun weightListFiltersByRangeAndInferredTag() {
+        val records = listOf(
+            WeightRecord("old", "2026-09-01", "07:00", 185.0),
+            WeightRecord("am", "2026-10-20", "07:10", 181.4),
+            WeightRecord("pm", "2026-10-20", "20:40", 184.1, tags = listOf(WeightTag.Travel.id)),
+            WeightRecord("gym", "2026-10-21", "18:00", 180.8, tags = listOf(WeightTag.AfterExercise.id)),
+        )
+        val last30 = filterWeightRecords(records, WeightChartRange.Last30, today = "2026-10-27")
+        assertEquals(listOf("am", "pm", "gym"), last30.map { it.id })
+        val mornings = filterWeightRecords(
+            records,
+            WeightChartRange.Last30,
+            tags = listOf(WeightTag.Morning.id),
+            today = "2026-10-27",
+        )
+        assertEquals(listOf("am"), mornings.map { it.id })
+        val travel = filterWeightRecords(
+            records,
+            WeightChartRange.All,
+            tags = listOf(WeightTag.Travel.id),
+            today = "2026-10-27",
+        )
+        assertEquals(listOf("pm"), travel.map { it.id })
+    }
+
+    @Test
+    fun weightDisplayConvertsAndStepsInKilograms() {
+        assertEquals(81.7, displayWeight(180.2, useKg = true), 0.05)
+        assertEquals(180.8, parseWeightInput("82.0", useKg = true)!!, 0.05)
+        assertEquals(180.2, parseWeightInput("180.2", useKg = false)!!, 0.05)
+        assertEquals("81.7 kg", formatWeightWithUnit(180.2, useKg = true))
+        val stepped = stepDisplayedWeight(180.2, 0.1, useKg = true)
+        assertEquals(81.8, displayWeight(stepped, useKg = true), 0.05)
+    }
+
+    @Test
+    fun waistValidationAndCaptionNameNhlbiCutoffs() {
+        assertEquals(null to null, validateWaistInches(""))
+        assertEquals(34.5 to null, validateWaistInches("34.5"))
+        assertEquals(null to "Waist must be 15–80 in.", validateWaistInches("10"))
+        assertEquals(null to "Waist must be 15–80 in.", validateWaistInches("90"))
+        assertEquals(null to "Enter a waist measurement.", validateWaistInches("n/a"))
+        val caption = formatWaistCaption(36.0)
+        assertTrue(caption.contains("36.0 in"))
+        assertTrue(caption.contains("40 in"))
+        assertTrue(caption.contains("35 in"))
+    }
+
+    @Test
+    fun weightShareKeepsPoundsAndIncludesNote() {
+        val records = listOf(
+            WeightRecord("am", "2026-10-12", "07:10", 181.4, note = "after walk"),
+            WeightRecord("pm", "2026-10-12", "20:40", 184.1, tags = listOf(WeightTag.Travel.id)),
+        )
+        val csv = buildWeightCsv(records)
+        assertTrue(csv.startsWith("date,time,weightLb,tags,note"))
+        assertTrue(csv.contains("2026-10-12,07:10,181.4,,after walk"))
+        assertTrue(csv.contains("2026-10-12,20:40,184.1,travel,"))
+        val report = buildWeightReport(records, generatedAt = "Tue, Oct 27, 2026 7:00 PM")
+        assertTrue(report.contains("Life Metric weight log"))
+        assertTrue(report.contains("181.4 lb"))
+        assertTrue(report.contains("after walk"))
+        assertTrue(report.contains("Travel"))
     }
 
     private fun load(id: String, planId: String, machineId: String, weight: Double, reps: Int) =

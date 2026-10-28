@@ -69,14 +69,19 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.markbriz.lifemetric.data.BloodPressureReading
-import com.markbriz.lifemetric.data.WeightRecord
 import com.markbriz.lifemetric.domain.BpStatus
 import com.markbriz.lifemetric.domain.BmiCategory
 import com.markbriz.lifemetric.domain.WeekBucket
+import com.markbriz.lifemetric.domain.bloodPressureGaugeProgress
 import com.markbriz.lifemetric.domain.bloodPressureStatus
+import com.markbriz.lifemetric.domain.isolatedBloodPressureNote
 import com.markbriz.lifemetric.domain.bmiCategory
 import com.markbriz.lifemetric.domain.chronologicalBp
+import com.markbriz.lifemetric.domain.DailyWeight
+import com.markbriz.lifemetric.domain.WeightChartModel
+import com.markbriz.lifemetric.domain.displayWeight
 import com.markbriz.lifemetric.domain.formatBmi
+import com.markbriz.lifemetric.domain.formatBmiCaption
 import com.markbriz.lifemetric.domain.shortDateLabel
 import com.markbriz.lifemetric.domain.trailingMovingAverage
 import com.markbriz.lifemetric.ui.theme.LocalAppColors
@@ -225,6 +230,34 @@ fun GhostButton(
     ) {
         Text(label, color = colors.brandDark, fontWeight = FontWeight.Bold, fontSize = 18.sp)
     }
+}
+
+@Composable
+fun ChoiceChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalAppColors.current
+    Text(
+        label,
+        color = if (selected) colors.brandDark else colors.ink,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 13.sp,
+        modifier = modifier
+            .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(if (selected) colors.brandSoft else colors.surface)
+            .border(1.dp, if (selected) colors.brand else colors.border, RoundedCornerShape(999.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 8.dp)
+            .semantics {
+                role = Role.Button
+                contentDescription = label
+            },
+        textAlign = TextAlign.Center,
+    )
 }
 
 @Composable
@@ -399,7 +432,7 @@ fun HistoryRow(
 }
 
 @Composable
-fun BpBadge(status: BpStatus, compact: Boolean = false) {
+fun BpBadge(status: BpStatus, compact: Boolean = false, systolic: Int? = null, diastolic: Int? = null) {
     var showGuide by remember { mutableStateOf(false) }
     val color = Color(status.color)
     Box(
@@ -429,12 +462,16 @@ fun BpBadge(status: BpStatus, compact: Boolean = false) {
         )
     }
     if (showGuide) {
-        BloodPressureCategoriesDialog(selected = status, onDismiss = { showGuide = false })
+        BloodPressureCategoriesDialog(
+            selected = status,
+            isolatedNote = if (systolic != null && diastolic != null) isolatedBloodPressureNote(systolic, diastolic) else null,
+            onDismiss = { showGuide = false },
+        )
     }
 }
 
 @Composable
-fun BloodPressureCategoriesDialog(selected: BpStatus, onDismiss: () -> Unit) {
+fun BloodPressureCategoriesDialog(selected: BpStatus, isolatedNote: String? = null, onDismiss: () -> Unit) {
     val colors = LocalAppColors.current
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -447,6 +484,9 @@ fun BloodPressureCategoriesDialog(selected: BpStatus, onDismiss: () -> Unit) {
                     fontSize = 13.sp,
                     lineHeight = 18.sp,
                 )
+                if (isolatedNote != null) {
+                    Text(isolatedNote, color = colors.ink, fontWeight = FontWeight.Medium, fontSize = 13.sp, lineHeight = 18.sp)
+                }
                 BpStatus.explained.forEach { category ->
                     CategoryGuideRow(category, highlighted = category == selected)
                 }
@@ -526,14 +566,24 @@ fun StatChip(label: String, value: String, hint: String?, modifier: Modifier = M
 @Composable
 fun BpGauge(systolic: Int, diastolic: Int, modifier: Modifier = Modifier) {
     val colors = LocalAppColors.current
+    val status = bloodPressureStatus(systolic, diastolic)
     val zones = listOf(
-        80f to 120f to Color(0xFF22C55E),
-        120f to 130f to Color(0xFFEAB308),
-        130f to 140f to Color(0xFFF97316),
-        140f to 180f to Color(0xFFEF4444),
-        180f to 200f to Color(0xFF991B1B),
+        BpStatus.Normal to Color(0xFF22C55E),
+        BpStatus.Elevated to Color(0xFFEAB308),
+        BpStatus.Stage1 to Color(0xFFF97316),
+        BpStatus.Stage2 to Color(0xFFEF4444),
+        BpStatus.Severe to Color(0xFF991B1B),
     )
-    Canvas(modifier.fillMaxWidth().height(180.dp)) {
+    val zoneIndex = zones.indexOfFirst { it.first == status }.coerceAtLeast(0)
+    val progress = bloodPressureGaugeProgress(systolic, diastolic)
+    Canvas(
+        modifier
+            .fillMaxWidth()
+            .height(180.dp)
+            .semantics {
+                contentDescription = "Blood pressure gauge. $systolic over $diastolic is ${status.label}."
+            },
+    ) {
         val stroke = 26.dp.toPx()
         val radius = min(size.width, size.height * 1.6f) * 0.38f
         val cx = size.width / 2f
@@ -541,7 +591,7 @@ fun BpGauge(systolic: Int, diastolic: Int, modifier: Modifier = Modifier) {
         val sweep = 180f / zones.size
         zones.forEachIndexed { index, zone ->
             drawArc(
-                color = zone.second,
+                color = zone.second.copy(alpha = if (index == zoneIndex) 1f else 0.35f),
                 startAngle = 180f + index * sweep,
                 sweepAngle = sweep,
                 useCenter = false,
@@ -550,12 +600,7 @@ fun BpGauge(systolic: Int, diastolic: Int, modifier: Modifier = Modifier) {
                 style = Stroke(width = stroke, cap = StrokeCap.Butt),
             )
         }
-        val clamped = systolic.toFloat().coerceIn(80f, 200f)
-        val zoneIndex = zones.indexOfFirst { clamped <= it.first.second }.let { if (it < 0) zones.lastIndex else it }
-        val zone = zones[zoneIndex].first
-        val span = (zone.second - zone.first).coerceAtLeast(1f)
-        val t = ((clamped - zone.first) / span).coerceIn(0f, 1f)
-        val angle = Math.toRadians((180.0 + zoneIndex * sweep + t * sweep))
+        val angle = Math.toRadians((180.0 + zoneIndex * sweep + progress * sweep))
         val needle = radius - stroke
         drawLine(
             color = colors.ink,
@@ -578,14 +623,21 @@ fun BpGauge(systolic: Int, diastolic: Int, modifier: Modifier = Modifier) {
 
 @Composable
 fun BmiGauge(bmi: Double, goalBmi: Double, compact: Boolean = false) {
+    var showGuide by remember { mutableStateOf(false) }
     val colors = LocalAppColors.current
-    val segments = listOf(
-        BmiCategory.Under to (12f to 18.5f),
-        BmiCategory.Healthy to (18.5f to 25f),
-        BmiCategory.Over to (25f to 30f),
-        BmiCategory.Obese to (30f to 35f),
-    )
     val category = bmiCategory(bmi)
+    val gaugeMin = BmiCategory.GAUGE_MIN
+    val gaugeMax = BmiCategory.GAUGE_MAX
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clickable { showGuide = true }
+            .semantics {
+                role = Role.Button
+                contentDescription = "BMI ${formatBmi(bmi)}. Show BMI category descriptions."
+            },
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
     Canvas(Modifier.fillMaxWidth().height(if (compact) 170.dp else 210.dp)) {
         val stroke = 26.dp.toPx()
         val radius = min(size.width * 0.34f, size.height * 0.42f)
@@ -593,10 +645,10 @@ fun BmiGauge(bmi: Double, goalBmi: Double, compact: Boolean = false) {
         val cy = size.height * 0.58f
         val start = 135f
         val total = 270f
-        val span = 35f - 12f
-        segments.forEach { (cat, range) ->
-            val a0 = start + ((range.first - 12f) / span) * total
-            val a1 = start + ((range.second - 12f) / span) * total
+        val span = gaugeMax - gaugeMin
+        BmiCategory.gaugeSegments.forEach { cat ->
+            val a0 = start + ((cat.gaugeStart - gaugeMin) / span) * total
+            val a1 = start + ((cat.gaugeEnd - gaugeMin) / span) * total
             drawArc(
                 color = Color(cat.color),
                 startAngle = a0,
@@ -609,7 +661,7 @@ fun BmiGauge(bmi: Double, goalBmi: Double, compact: Boolean = false) {
         }
         fun needle(value: Double, color: Color) {
             if (value.isNaN()) return
-            val t = ((value.toFloat().coerceIn(12f, 35f) - 12f) / span)
+            val t = ((value.toFloat().coerceIn(gaugeMin, gaugeMax) - gaugeMin) / span)
             val angle = Math.toRadians((start + t * total).toDouble())
             val tip = radius - stroke / 2
             drawLine(
@@ -633,15 +685,61 @@ fun BmiGauge(bmi: Double, goalBmi: Double, compact: Boolean = false) {
         fontWeight = FontWeight.ExtraBold,
         fontSize = if (compact) 28.sp else 36.sp,
     )
-    if (category != null) {
+    formatBmiCaption(bmi, compact)?.let { caption ->
         Text(
-            "${category.label} · ${category.range}",
+            caption,
             modifier = Modifier.fillMaxWidth(),
             textAlign = TextAlign.Center,
-            color = Color(category.color),
+            color = category?.let { Color(it.color) } ?: colors.inkMuted,
             fontWeight = FontWeight.SemiBold,
         )
     }
+    if (!compact && category != null) {
+        Text(
+            "${category.range} · CDC / NHLBI adult screening. Not a diagnosis.",
+            modifier = Modifier.fillMaxWidth(),
+            textAlign = TextAlign.Center,
+            color = colors.inkMuted,
+            fontSize = 12.sp,
+        )
+    }
+    }
+    if (showGuide) {
+        BmiCategoriesDialog(selected = category, onDismiss = { showGuide = false })
+    }
+}
+
+@Composable
+fun BmiCategoriesDialog(selected: BmiCategory?, onDismiss: () -> Unit) {
+    val colors = LocalAppColors.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Body Mass Index") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "CDC / NHLBI adult screening categories. BMI does not measure fat, muscle, or bone, and can misclassify athletes and older adults. It is not a diagnosis. Talk with a clinician about what your number means for you.",
+                    color = colors.inkMuted,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp,
+                )
+                BmiCategory.entries.forEach { category ->
+                    val tint = Color(category.color)
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(if (category == selected) tint.copy(alpha = 0.12f) else Color.Transparent)
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                    ) {
+                        Text(category.label, color = tint, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Text(category.range, color = colors.inkMuted, fontSize = 13.sp)
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } },
+    )
 }
 
 @Composable
@@ -850,20 +948,28 @@ private fun ChartLegendSwatch(color: Color, label: String) {
 }
 
 @Composable
-fun WeightChart(records: List<WeightRecord>, goal: Double?) {
+fun WeightChart(model: WeightChartModel, goal: Double?, useKg: Boolean = false) {
     val colors = LocalAppColors.current
-    if (records.isEmpty()) return
-    val xLabelIndexes = if (records.size <= 4) {
-        records.indices.toList()
-    } else {
-        listOf(0, records.lastIndex / 2, records.lastIndex).distinct()
-    }
+    val startDay = runCatching { java.time.LocalDate.parse(model.startDate).toEpochDay() }.getOrNull() ?: return
+    val endDay = runCatching { java.time.LocalDate.parse(model.endDate).toEpochDay() }.getOrNull() ?: startDay
+    val axisSpan = (endDay - startDay).coerceAtLeast(1L)
+    val xLabels = listOf(
+        model.startDate,
+        runCatching {
+            java.time.LocalDate.ofEpochDay((startDay + endDay) / 2).toString()
+        }.getOrDefault(model.startDate),
+        model.endDate,
+    ).distinct()
+    fun shown(lb: Double) = displayWeight(lb, useKg).toFloat()
+    val values = model.points.flatMap { point ->
+        listOf(shown(point.weight), shown(model.trendByDate[point.date] ?: point.weight))
+    } + listOfNotNull(goal?.let { shown(it) })
+    if (values.isEmpty()) return
     Canvas(Modifier.fillMaxWidth().height(200.dp)) {
         val padL = 48.dp.toPx()
         val padR = 12.dp.toPx()
         val padT = 16.dp.toPx()
         val padB = 32.dp.toPx()
-        val values = records.map { it.weight.toFloat() } + listOfNotNull(goal?.toFloat())
         val minV = values.min()
         val maxV = values.max()
         val span = (maxV - minV).coerceAtLeast(1f)
@@ -871,8 +977,21 @@ fun WeightChart(records: List<WeightRecord>, goal: Double?) {
         var yMax = ceil(maxV + span * 0.15f)
         if (yMax <= yMin) yMax = yMin + 2f
         if (((yMax - yMin).toInt() % 2) != 0) yMax += 1f
-        fun x(i: Int) = if (records.size == 1) (padL + size.width - padR) / 2 else padL + i.toFloat() / records.lastIndex * (size.width - padL - padR)
+        fun xOf(date: String): Float {
+            val day = runCatching { java.time.LocalDate.parse(date).toEpochDay() }.getOrNull() ?: startDay
+            val t = (day - startDay).toFloat() / axisSpan.toFloat()
+            return padL + t.coerceIn(0f, 1f) * (size.width - padL - padR)
+        }
         fun y(v: Float) = padT + ((yMax - v) / (yMax - yMin)) * (size.height - padT - padB)
+        fun pathOf(selector: (DailyWeight) -> Float): Path {
+            val path = Path()
+            model.points.forEachIndexed { index, point ->
+                val px = xOf(point.date)
+                val py = y(selector(point))
+                if (index == 0) path.moveTo(px, py) else path.lineTo(px, py)
+            }
+            return path
+        }
         val yTicks = listOf(yMin, (yMin + yMax) / 2f, yMax)
         yTicks.forEach { tick ->
             val tickY = y(tick)
@@ -891,36 +1010,42 @@ fun WeightChart(records: List<WeightRecord>, goal: Double?) {
                 canvas.nativeCanvas.drawText(tick.roundToInt().toString(), padL - 8.dp.toPx(), tickY, paint)
             }
             val xBaseline = size.height - 6.dp.toPx()
-            xLabelIndexes.forEach { index ->
+            xLabels.forEachIndexed { index, date ->
                 paint.textAlign = when {
-                    records.size == 1 -> android.graphics.Paint.Align.CENTER
+                    xLabels.size == 1 -> android.graphics.Paint.Align.CENTER
                     index == 0 -> android.graphics.Paint.Align.LEFT
-                    index == records.lastIndex -> android.graphics.Paint.Align.RIGHT
+                    index == xLabels.lastIndex -> android.graphics.Paint.Align.RIGHT
                     else -> android.graphics.Paint.Align.CENTER
                 }
-                canvas.nativeCanvas.drawText(shortDateLabel(records[index].date), x(index), xBaseline, paint)
+                canvas.nativeCanvas.drawText(shortDateLabel(date), xOf(date), xBaseline, paint)
             }
         }
         if (goal != null) {
             drawLine(
                 color = colors.success,
-                start = Offset(padL, y(goal.toFloat())),
-                end = Offset(size.width - padR, y(goal.toFloat())),
+                start = Offset(padL, y(shown(goal))),
+                end = Offset(size.width - padR, y(shown(goal))),
                 strokeWidth = 2.5.dp.toPx(),
                 cap = StrokeCap.Butt,
                 pathEffect = PathEffect.dashPathEffect(floatArrayOf(18.dp.toPx(), 8.dp.toPx())),
             )
         }
-        val path = Path()
-        records.forEachIndexed { index, record ->
-            val px = x(index)
-            val py = y(record.weight.toFloat())
-            if (index == 0) path.moveTo(px, py) else path.lineTo(px, py)
+        if (model.points.isNotEmpty()) {
+            drawPath(pathOf { shown(it.weight) }, colors.brand.copy(alpha = 0.45f), style = Stroke(2.5f, cap = StrokeCap.Round))
+            drawPath(
+                pathOf { shown(model.trendByDate[it.date] ?: it.weight) },
+                colors.brand,
+                style = Stroke(4f, cap = StrokeCap.Round),
+            )
+            model.points.forEach { point ->
+                drawCircle(colors.brand.copy(alpha = 0.45f), 3.5.dp.toPx(), Offset(xOf(point.date), y(shown(point.weight))))
+            }
         }
-        drawPath(path, colors.brand, style = Stroke(4f, cap = StrokeCap.Round))
-        records.forEachIndexed { index, record ->
-            drawCircle(colors.brand, 4.5.dp.toPx(), Offset(x(index), y(record.weight.toFloat())))
-        }
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+        ChartLegendSwatch(colors.brand.copy(alpha = 0.45f), "Daily low")
+        ChartLegendSwatch(colors.brand, "7-day trend")
+        if (goal != null) ChartLegendSwatch(colors.success, "Goal")
     }
 }
 

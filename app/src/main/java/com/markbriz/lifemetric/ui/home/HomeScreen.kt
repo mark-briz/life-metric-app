@@ -18,18 +18,25 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.markbriz.lifemetric.data.FitnessStore
+import com.markbriz.lifemetric.domain.bloodPressureDelta
+import com.markbriz.lifemetric.domain.bloodPressureLowHint
 import com.markbriz.lifemetric.domain.bloodPressureStatus
+import com.markbriz.lifemetric.domain.bloodPressureVisitSummary
 import com.markbriz.lifemetric.domain.calculateBmi
-import com.markbriz.lifemetric.domain.chronologicalWeights
+import com.markbriz.lifemetric.domain.formatBloodPressureDelta
 import com.markbriz.lifemetric.domain.formatDate
-import com.markbriz.lifemetric.domain.formatDelta
+import com.markbriz.lifemetric.domain.formatDerivedBloodPressure
 import com.markbriz.lifemetric.domain.formatRelativeDays
 import com.markbriz.lifemetric.domain.formatTime
-import com.markbriz.lifemetric.domain.formatWeight
+import com.markbriz.lifemetric.domain.formatVisitSummaryLine
+import com.markbriz.lifemetric.domain.formatWeightTrendDelta
+import com.markbriz.lifemetric.domain.formatWeightWithUnit
 import com.markbriz.lifemetric.domain.latestBloodPressure
 import com.markbriz.lifemetric.domain.latestWeight
+import com.markbriz.lifemetric.domain.latestWeightTrend
 import com.markbriz.lifemetric.domain.recentBloodPressure
-import com.markbriz.lifemetric.domain.weightDelta
+import com.markbriz.lifemetric.domain.homeWeightChartModel
+import com.markbriz.lifemetric.domain.weightTrendDelta
 import com.markbriz.lifemetric.domain.workoutSessionsByWeek
 import com.markbriz.lifemetric.domain.workoutsInLastDays
 import com.markbriz.lifemetric.ui.components.AppScreen
@@ -60,14 +67,23 @@ fun HomeScreen(
 ) {
     val colors = LocalAppColors.current
     val latestBp = latestBloodPressure(store.bloodPressureReadings)
+    val useKg = store.profile.weightDisplayKg
     val latestWeight = latestWeight(store.weightRecords)
-    val delta = weightDelta(store.weightRecords)
+    val bpDelta = bloodPressureDelta(store.bloodPressureReadings)
+    val trend = latestWeightTrend(store.weightRecords)
+    val trendDelta = weightTrendDelta(store.weightRecords)
+    val showWeightTrend = latestWeight != null && store.weightRecords.size >= 2 && trend != null
     val sessions = workoutsInLastDays(store.workouts, 30)
     val sets = sessions.sumOf { it.entries.size }
     val lastWorkout = store.workouts.maxByOrNull { it.date }
     val lastPlan = store.plans.find { it.id == lastWorkout?.planId }?.name
     val bpTrend = recentBloodPressure(store.bloodPressureReadings, 10)
-    val weightTrend = chronologicalWeights(store.weightRecords).takeLast(10)
+    val bpSummary = bloodPressureVisitSummary(
+        store.bloodPressureReadings,
+        store.profile.bpTargetSystolic,
+        store.profile.bpTargetDiastolic,
+    )
+    val weightChart = homeWeightChartModel(store.weightRecords)
     val bmi = if (latestWeight != null && store.profile.heightInches != null) {
         calculateBmi(latestWeight.weight, store.profile.heightInches)
     } else Double.NaN
@@ -81,11 +97,26 @@ fun HomeScreen(
 
     AppScreen(title = "Dashboard", lead = "Blood pressure, weight, and workouts at a glance.") {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            StatChip("Latest BP", latestBp?.let { "${it.systolic}/${it.diastolic}" } ?: "—", latestBp?.let { "${it.heartRate} bpm" } ?: "No readings", Modifier.weight(1f))
             StatChip(
-                "Latest weight",
-                latestWeight?.let { "${formatWeight(it.weight)} lb" } ?: "—",
-                delta?.let { formatDelta(it, "lb") } ?: latestWeight?.let { formatDate(it.date) } ?: "No readings",
+                "Latest BP",
+                latestBp?.let { "${it.systolic}/${it.diastolic}" } ?: "—",
+                latestBp?.let { reading ->
+                    reading.heartRate?.let { "$it bpm" } ?: formatDerivedBloodPressure(reading.systolic, reading.diastolic)
+                } ?: "No readings",
+                Modifier.weight(1f),
+            )
+            StatChip(
+                if (showWeightTrend) "Weight trend" else "Latest weight",
+                when {
+                    showWeightTrend -> formatWeightWithUnit(trend!!, useKg)
+                    latestWeight != null -> formatWeightWithUnit(latestWeight.weight, useKg)
+                    else -> "—"
+                },
+                when {
+                    trendDelta != null -> formatWeightTrendDelta(trendDelta, useKg)
+                    latestWeight != null -> formatDate(latestWeight.date)
+                    else -> "No readings"
+                },
                 Modifier.weight(1f),
             )
             StatChip("Workouts (30d)", sessions.size.toString(), formatRelativeDays(lastWorkout?.date), Modifier.weight(1f))
@@ -95,19 +126,41 @@ fun HomeScreen(
             SurfaceCard {
                 Text("Record your first readings and a workout so the dashboard can show trends.", color = colors.inkMuted, fontSize = 14.sp, lineHeight = 20.sp)
             }
-            SettingsRow("Record blood pressure", "Systolic, diastolic, and heart rate.", onAddBp)
+            SettingsRow("Record blood pressure", "Systolic and diastolic. Heart rate is optional.", onAddBp)
             SettingsRow("Record weight", "Unlocks BMI after you set height.", onAddWeight)
             SettingsRow("Log a workout", "Starter plans are ready.", onAddWorkout)
         }
         DashSection("Blood pressure", "Trend and category chart", onOpenBp, Icons.Default.MonitorHeart, onAddBp, "Add reading") {
             if (latestBp == null) {
-                EmptyState("No BP readings", "Record systolic, diastolic, and heart rate to populate the gauge and chart.")
+                EmptyState("No BP readings", "Record systolic and diastolic to populate the gauge and chart.")
             } else {
                 val status = bloodPressureStatus(latestBp.systolic, latestBp.diastolic)
                 BpGauge(latestBp.systolic, latestBp.diastolic)
-                BpBadge(status)
+                BpBadge(status, systolic = latestBp.systolic, diastolic = latestBp.diastolic)
+                bloodPressureLowHint(latestBp.systolic, latestBp.diastolic)?.let { hint ->
+                    Text(hint, color = colors.inkMuted, fontSize = 13.sp, lineHeight = 18.sp)
+                }
+                if (bpDelta != null) {
+                    Text(
+                        formatBloodPressureDelta(bpDelta),
+                        color = when {
+                            bpDelta.systolic == 0 && bpDelta.diastolic == 0 -> colors.inkMuted
+                            bpDelta.systolic <= 0 && bpDelta.diastolic <= 0 -> colors.success
+                            else -> colors.accent
+                        },
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 13.sp,
+                    )
+                }
+                Text(formatDerivedBloodPressure(latestBp.systolic, latestBp.diastolic), color = colors.inkMuted, fontSize = 13.sp)
                 Text("${formatDate(latestBp.date)} · ${formatTime(latestBp.time)}", color = colors.inkMuted, fontSize = 13.sp)
-                Text("Heart rate ${latestBp.heartRate} bpm", color = colors.inkMuted, fontSize = 13.sp)
+                latestBp.heartRate?.let { rate ->
+                    Text("Heart rate $rate bpm", color = colors.inkMuted, fontSize = 13.sp)
+                }
+                if (bpSummary != null) {
+                    Text(formatVisitSummaryLine(bpSummary), color = colors.ink, fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                    Text("AHA categories on this average use the last 7 days, not one reading.", color = colors.inkMuted, fontSize = 12.sp)
+                }
                 if (bpTrend.size > 1) {
                     Text("Recent readings trend", color = colors.inkMuted, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                     BloodPressureChart(bpTrend, store.bloodPressureReadings, store.profile.bpMovingAverageReadings)
@@ -121,16 +174,25 @@ fun HomeScreen(
             if (latestWeight == null) {
                 EmptyState("No weight readings", "Record scale readings to see your trend chart and BMI gauge.")
             } else {
-                Text("${formatWeight(latestWeight.weight)} lb", color = colors.ink, fontSize = 36.sp, fontWeight = FontWeight.ExtraBold)
-                if (delta != null) {
-                    Text(
-                        "${formatDelta(delta, "lb")} vs prior",
-                        color = if (delta <= 0) colors.success else colors.accent,
-                        fontWeight = FontWeight.Medium,
-                    )
+                if (showWeightTrend) {
+                    Text(formatWeightWithUnit(trend ?: latestWeight.weight, useKg), color = colors.ink, fontSize = 36.sp, fontWeight = FontWeight.ExtraBold)
+                    Text("last ${formatWeightWithUnit(latestWeight.weight, useKg)}", color = colors.inkMuted, fontSize = 13.sp)
+                    if (trendDelta != null) {
+                        Text(
+                            formatWeightTrendDelta(trendDelta, useKg),
+                            color = if (trendDelta <= 0) colors.success else colors.accent,
+                            fontWeight = FontWeight.Medium,
+                        )
+                    }
+                } else {
+                    Text(formatWeightWithUnit(latestWeight.weight, useKg), color = colors.ink, fontSize = 36.sp, fontWeight = FontWeight.ExtraBold)
                 }
                 Text("Weight history", color = colors.inkMuted, fontSize = 13.sp)
-                WeightChart(weightTrend, store.profile.weightGoalLb)
+                if (weightChart != null && weightChart.points.isNotEmpty()) {
+                    WeightChart(weightChart, store.profile.weightGoalLb, useKg)
+                } else {
+                    Text("Add another day to see a time-scaled trend.", color = colors.inkMuted, fontSize = 13.sp)
+                }
                 if (!bmi.isNaN()) {
                     Text("BMI gauge", color = colors.inkMuted, fontSize = 13.sp)
                     BmiGauge(bmi, goalBmi, compact = true)

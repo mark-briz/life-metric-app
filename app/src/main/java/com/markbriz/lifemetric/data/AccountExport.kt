@@ -1,6 +1,8 @@
 package com.markbriz.lifemetric.data
 
 import com.markbriz.lifemetric.domain.DEFAULT_BP_WINDOW
+import com.markbriz.lifemetric.domain.MAX_WAIST_IN
+import com.markbriz.lifemetric.domain.MIN_WAIST_IN
 import com.markbriz.lifemetric.domain.clampBpWindow
 import com.markbriz.lifemetric.domain.roundToTenth
 import kotlinx.serialization.json.Json
@@ -11,6 +13,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.put
@@ -67,6 +70,10 @@ private fun dataObject(store: FitnessStore): JsonObject = buildJsonObject {
                         put("date", record.date)
                         put("time", record.time)
                         put("weight", roundToTenth(record.weight))
+                        if (record.tags.isNotEmpty()) {
+                            put("tags", buildJsonArray { record.tags.forEach { add(JsonPrimitive(it)) } })
+                        }
+                        if (record.note.isNotBlank()) put("note", record.note)
                     },
                 )
             }
@@ -83,7 +90,29 @@ private fun dataObject(store: FitnessStore): JsonObject = buildJsonObject {
                         put("time", reading.time)
                         put("systolic", reading.systolic)
                         put("diastolic", reading.diastolic)
-                        put("heartRate", reading.heartRate)
+                        put("heartRate", reading.heartRate?.let { JsonPrimitive(it) } ?: JsonNull)
+                        if (reading.period != null) put("period", reading.period)
+                        if (reading.pairId != null) put("pairId", reading.pairId)
+                        if (reading.averagedFrom.isNotEmpty()) {
+                            put(
+                                "averagedFrom",
+                                buildJsonArray {
+                                    reading.averagedFrom.forEach { sample ->
+                                        add(
+                                            buildJsonObject {
+                                                put("systolic", sample.systolic)
+                                                put("diastolic", sample.diastolic)
+                                                put("heartRate", sample.heartRate?.let { JsonPrimitive(it) } ?: JsonNull)
+                                            },
+                                        )
+                                    }
+                                },
+                            )
+                        }
+                        if (reading.tags.isNotEmpty()) {
+                            put("tags", buildJsonArray { reading.tags.forEach { add(JsonPrimitive(it)) } })
+                        }
+                        if (reading.note.isNotBlank()) put("note", reading.note)
                     },
                 )
             }
@@ -101,6 +130,16 @@ private fun dataObject(store: FitnessStore): JsonObject = buildJsonObject {
                 "weightGoalStartId",
                 store.profile.weightGoalStartId?.let { JsonPrimitive(exportWeightId(it)) } ?: JsonNull,
             )
+            put("bpTargetSystolic", store.profile.bpTargetSystolic?.let { JsonPrimitive(it) } ?: JsonNull)
+            put("bpTargetDiastolic", store.profile.bpTargetDiastolic?.let { JsonPrimitive(it) } ?: JsonNull)
+            put("bpMorningReminder", store.profile.bpMorningReminder)
+            put("bpEveningReminder", store.profile.bpEveningReminder)
+            put("bpMorningReminderTime", store.profile.bpMorningReminderTime)
+            put("bpEveningReminderTime", store.profile.bpEveningReminderTime)
+            put("weightMorningReminder", store.profile.weightMorningReminder)
+            put("weightMorningReminderTime", store.profile.weightMorningReminderTime)
+            put("weightDisplayKg", store.profile.weightDisplayKg)
+            put("waistInches", store.profile.waistInches?.let { JsonPrimitive(it) } ?: JsonNull)
         },
     )
 }
@@ -355,7 +394,14 @@ private fun normalizeWeights(value: JsonElement?): List<WeightRecord> {
         val date = record["date"].asString() ?: return@mapNotNull null
         val weight = record["weight"].asNumber() ?: return@mapNotNull null
         val time = record["time"].asString()?.takeIf { it.isNotEmpty() } ?: "00:00"
-        WeightRecord(id = id, date = date, time = time, weight = roundToTenth(weight))
+        WeightRecord(
+            id = id,
+            date = date,
+            time = time,
+            weight = roundToTenth(weight),
+            tags = normalizeStringList(record["tags"]),
+            note = record["note"].asString().orEmpty(),
+        )
     }
 }
 
@@ -368,15 +414,27 @@ private fun normalizeBloodPressure(value: JsonElement?): List<BloodPressureReadi
         val time = record["time"].asString() ?: return@mapNotNull null
         val systolic = record["systolic"].asNumber() ?: return@mapNotNull null
         val diastolic = record["diastolic"].asNumber() ?: return@mapNotNull null
-        val heartRate = record["heartRate"].asNumber() ?: return@mapNotNull null
-        if (heartRate != Math.floor(heartRate) || heartRate < 1) return@mapNotNull null
+        val heartRateElement = record["heartRate"]
+        val heartRate = when {
+            heartRateElement == null || heartRateElement is JsonNull -> null
+            else -> {
+                val value = heartRateElement.asNumber() ?: return@mapNotNull null
+                if (value != Math.floor(value) || value < 1) return@mapNotNull null
+                value.toInt()
+            }
+        }
         BloodPressureReading(
             id = id,
             date = date,
             time = time,
             systolic = systolic.toInt(),
             diastolic = diastolic.toInt(),
-            heartRate = heartRate.toInt(),
+            heartRate = heartRate,
+            period = record["period"].asString(),
+            pairId = record["pairId"].asString(),
+            averagedFrom = normalizeBloodPressureSamples(record["averagedFrom"]),
+            tags = normalizeStringList(record["tags"]),
+            note = record["note"].asString().orEmpty(),
         )
     }
 }
@@ -401,7 +459,41 @@ private fun normalizeProfile(value: JsonElement?): UserProfile {
         weightGoalLb = goal,
         bpMovingAverageReadings = window,
         weightGoalStartId = record["weightGoalStartId"].asTrimmed(),
+        bpTargetSystolic = record["bpTargetSystolic"].asWhole()?.takeIf { it > 0 },
+        bpTargetDiastolic = record["bpTargetDiastolic"].asWhole()?.takeIf { it > 0 },
+        bpMorningReminder = record["bpMorningReminder"].asBoolean(),
+        bpEveningReminder = record["bpEveningReminder"].asBoolean(),
+        bpMorningReminderTime = record["bpMorningReminderTime"].asString()?.takeIf { it.isNotBlank() } ?: "07:00",
+        bpEveningReminderTime = record["bpEveningReminderTime"].asString()?.takeIf { it.isNotBlank() } ?: "19:00",
+        weightMorningReminder = record["weightMorningReminder"].asBoolean(),
+        weightMorningReminderTime = record["weightMorningReminderTime"].asString()?.takeIf { it.isNotBlank() } ?: "07:00",
+        weightDisplayKg = record["weightDisplayKg"].asBoolean(),
+        waistInches = record["waistInches"].asNumber()?.takeIf { it >= MIN_WAIST_IN && it <= MAX_WAIST_IN }?.let(::roundToTenth),
     )
+}
+
+private fun normalizeStringList(value: JsonElement?): List<String> {
+    val array = value as? JsonArray ?: return emptyList()
+    return array.mapNotNull { it.asString()?.trim()?.takeIf(String::isNotEmpty) }
+}
+
+private fun normalizeBloodPressureSamples(value: JsonElement?): List<BloodPressureSample> {
+    val array = value as? JsonArray ?: return emptyList()
+    return array.mapNotNull { element ->
+        val record = element as? JsonObject ?: return@mapNotNull null
+        val systolic = record["systolic"].asNumber() ?: return@mapNotNull null
+        val diastolic = record["diastolic"].asNumber() ?: return@mapNotNull null
+        val heartRateElement = record["heartRate"]
+        val heartRate = when {
+            heartRateElement == null || heartRateElement is JsonNull -> null
+            else -> {
+                val parsed = heartRateElement.asNumber() ?: return@mapNotNull null
+                if (parsed != Math.floor(parsed) || parsed < 1) return@mapNotNull null
+                parsed.toInt()
+            }
+        }
+        BloodPressureSample(systolic.toInt(), diastolic.toInt(), heartRate)
+    }
 }
 
 // ---- strict checks (mirrors assertReadable) ----
@@ -474,6 +566,13 @@ private fun JsonElement?.asDouble(): Double? {
 }
 
 private fun JsonElement?.asWhole(): Int? = asDouble()?.takeIf { it == Math.floor(it) }?.toInt()
+
+private fun JsonElement?.asBoolean(): Boolean {
+    val primitive = this as? JsonPrimitive ?: return false
+    return primitive.booleanOrNull
+        ?: primitive.contentOrNull?.equals("true", ignoreCase = true)
+        ?: false
+}
 
 /** Missing or invalid optional telemetry defaults to 0 so older export files still load. */
 private fun JsonElement?.asNonNegativeDouble(): Double = asDouble()?.takeIf { it >= 0 } ?: 0.0

@@ -60,6 +60,15 @@ data class WeightRecord(
     val date: String,
     val time: String,
     val weight: Double,
+    val tags: List<String> = emptyList(),
+    val note: String = "",
+)
+
+@Serializable
+data class BloodPressureSample(
+    val systolic: Int,
+    val diastolic: Int,
+    val heartRate: Int? = null,
 )
 
 @Serializable
@@ -69,7 +78,14 @@ data class BloodPressureReading(
     val time: String,
     val systolic: Int,
     val diastolic: Int,
-    val heartRate: Int,
+    val heartRate: Int? = null,
+    /** Stored morning / evening / other override. Null means infer from time. */
+    val period: String? = null,
+    val pairId: String? = null,
+    /** Raw cuff inflations when systolic/diastolic are the pair average. */
+    val averagedFrom: List<BloodPressureSample> = emptyList(),
+    val tags: List<String> = emptyList(),
+    val note: String = "",
 )
 
 @Serializable
@@ -81,6 +97,16 @@ data class UserProfile(
     val bpMovingAverageReadings: Int = 10,
     /** Id of the weight reading that starts the current goal, if any. */
     val weightGoalStartId: String? = null,
+    val bpTargetSystolic: Int? = null,
+    val bpTargetDiastolic: Int? = null,
+    val bpMorningReminder: Boolean = false,
+    val bpEveningReminder: Boolean = false,
+    val bpMorningReminderTime: String = "07:00",
+    val bpEveningReminderTime: String = "19:00",
+    val weightMorningReminder: Boolean = false,
+    val weightMorningReminderTime: String = "07:00",
+    val weightDisplayKg: Boolean = false,
+    val waistInches: Double? = null,
 )
 
 @Serializable

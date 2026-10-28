@@ -14,12 +14,17 @@ import com.markbriz.lifemetric.data.WorkoutEntry
 import com.markbriz.lifemetric.data.newId
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.markbriz.lifemetric.domain.BloodPressureSave
 import com.markbriz.lifemetric.domain.clampBpWindow
 import com.markbriz.lifemetric.domain.lastUsedPlanId
 import com.markbriz.lifemetric.domain.nowTime
 import com.markbriz.lifemetric.domain.roundToTenth
 import com.markbriz.lifemetric.domain.todayIso
+import com.markbriz.lifemetric.domain.validateBloodPressureTarget
 import com.markbriz.lifemetric.domain.validateProfile
+import com.markbriz.lifemetric.domain.validateWaistInches
+import com.markbriz.lifemetric.reminders.BloodPressureReminders
+import com.markbriz.lifemetric.reminders.WeightReminders
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -66,6 +71,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val elapsed = System.currentTimeMillis() - started
             if (elapsed < 900) delay(900 - elapsed)
             _state.value = stateFrom(file, booting = false)
+            BloodPressureReminders.sync(getApplication(), file.store.profile)
+            WeightReminders.sync(getApplication(), file.store.profile)
         }
     }
 
@@ -85,6 +92,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 lastDeleted = null
                 val file = withContext(Dispatchers.IO) { repo.eraseAll() }
                 _state.value = stateFrom(file, booting = false)
+                BloodPressureReminders.sync(getApplication(), file.store.profile)
+                WeightReminders.sync(getApplication(), file.store.profile)
             }
         }
     }
@@ -129,6 +138,54 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             )
         }
         return result.heightFeetError ?: result.heightInchesError ?: result.weightGoalError ?: result.bpError
+    }
+
+    fun saveBpTarget(systolicText: String, diastolicText: String): String? {
+        val result = validateBloodPressureTarget(systolicText, diastolicText)
+        if (!result.ok) return result.error
+        mutate { store ->
+            store.copy(
+                profile = store.profile.copy(
+                    bpTargetSystolic = result.systolic,
+                    bpTargetDiastolic = result.diastolic,
+                ),
+            )
+        }
+        return null
+    }
+
+    fun saveBpReminders(
+        morning: Boolean,
+        evening: Boolean,
+        morningTime: String,
+        eveningTime: String,
+    ) {
+        val morningClock = morningTime.ifBlank { "07:00" }
+        val eveningClock = eveningTime.ifBlank { "19:00" }
+        mutate { store ->
+            store.copy(
+                profile = store.profile.copy(
+                    bpMorningReminder = morning,
+                    bpEveningReminder = evening,
+                    bpMorningReminderTime = morningClock,
+                    bpEveningReminderTime = eveningClock,
+                ),
+            )
+        }
+        BloodPressureReminders.schedule(getApplication(), morning, evening, morningClock, eveningClock)
+    }
+
+    fun saveWeightReminders(enabled: Boolean, time: String) {
+        val clock = time.ifBlank { "07:00" }
+        mutate { store ->
+            store.copy(
+                profile = store.profile.copy(
+                    weightMorningReminder = enabled,
+                    weightMorningReminderTime = clock,
+                ),
+            )
+        }
+        WeightReminders.schedule(getApplication(), enabled, clock)
     }
 
     fun savePlan(planId: String?, name: String, description: String, activityTypeId: String): String? {
@@ -277,23 +334,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         return copy(entries = entries)
     }
 
-    fun saveBloodPressure(
-        readingId: String?,
-        date: String,
-        time: String,
-        systolic: Int,
-        diastolic: Int,
-        heartRate: Int,
-    ) {
+    fun saveBloodPressure(readingId: String?, draft: BloodPressureSave) {
         mutate { store ->
             val readings = store.bloodPressureReadings.toMutableList()
             val reading = BloodPressureReading(
                 id = readingId ?: newId("bp"),
-                date = date,
-                time = time.ifBlank { nowTime() },
-                systolic = systolic,
-                diastolic = diastolic,
-                heartRate = heartRate,
+                date = draft.date,
+                time = draft.time.ifBlank { nowTime() },
+                systolic = draft.systolic,
+                diastolic = draft.diastolic,
+                heartRate = draft.heartRate,
+                period = draft.period,
+                pairId = draft.pairId,
+                averagedFrom = draft.averagedFrom,
+                tags = draft.tags,
+                note = draft.note,
             )
             val index = readings.indexOfFirst { it.id == reading.id }
             if (index >= 0) readings[index] = reading else readings += reading
@@ -309,7 +364,29 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun saveWeight(recordId: String?, date: String, time: String, weight: Double) {
+    fun saveWeightDisplayKg(useKg: Boolean) {
+        mutate { store ->
+            store.copy(profile = store.profile.copy(weightDisplayKg = useKg))
+        }
+    }
+
+    fun saveWaist(waistText: String): String? {
+        val result = validateWaistInches(waistText)
+        if (result.second != null) return result.second
+        mutate { store ->
+            store.copy(profile = store.profile.copy(waistInches = result.first))
+        }
+        return null
+    }
+
+    fun saveWeight(
+        recordId: String?,
+        date: String,
+        time: String,
+        weight: Double,
+        tags: List<String> = emptyList(),
+        note: String = "",
+    ) {
         mutate { store ->
             val records = store.weightRecords.toMutableList()
             val record = WeightRecord(
@@ -317,6 +394,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 date = date,
                 time = time.ifBlank { nowTime() },
                 weight = roundToTenth(weight),
+                tags = tags,
+                note = note.trim(),
             )
             val index = records.indexOfFirst { it.id == record.id }
             if (index >= 0) records[index] = record else records += record
@@ -415,6 +494,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                             notice = null,
                         )
                     }
+                    BloodPressureReminders.sync(getApplication(), updated.store.profile)
+                    WeightReminders.sync(getApplication(), updated.store.profile)
                     onDone(null)
                 }.onFailure { onDone(it.message ?: "Unable to load this file.") }
             }

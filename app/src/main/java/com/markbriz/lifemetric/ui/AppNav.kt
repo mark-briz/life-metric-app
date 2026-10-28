@@ -36,13 +36,17 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.markbriz.lifemetric.domain.latestBloodPressure
 import com.markbriz.lifemetric.domain.latestWeight
 import com.markbriz.lifemetric.ui.bp.BloodPressureFormScreen
+import com.markbriz.lifemetric.ui.bp.BloodPressureMeasureScreen
 import com.markbriz.lifemetric.ui.bp.BloodPressureScreen
 import com.markbriz.lifemetric.ui.components.GradientBackground
 import com.markbriz.lifemetric.ui.home.HomeScreen
 import com.markbriz.lifemetric.ui.profile.AboutScreen
 import com.markbriz.lifemetric.ui.profile.ActivityFormScreen
+import com.markbriz.lifemetric.ui.profile.BpReminderEditorScreen
+import com.markbriz.lifemetric.ui.profile.BpTargetEditorScreen
 import com.markbriz.lifemetric.ui.profile.BpWindowEditorScreen
 import com.markbriz.lifemetric.ui.profile.DisclaimerScreen
 import com.markbriz.lifemetric.ui.profile.HeightEditorScreen
@@ -51,9 +55,13 @@ import com.markbriz.lifemetric.ui.profile.PlanFormScreen
 import com.markbriz.lifemetric.ui.profile.PlansScreen
 import com.markbriz.lifemetric.ui.profile.ProfileScreen
 import com.markbriz.lifemetric.ui.profile.ThemeEditorScreen
+import com.markbriz.lifemetric.ui.profile.WaistEditorScreen
 import com.markbriz.lifemetric.ui.profile.WeightGoalEditorScreen
+import com.markbriz.lifemetric.ui.profile.WeightReminderEditorScreen
+import com.markbriz.lifemetric.ui.profile.WeightUnitsEditorScreen
 import com.markbriz.lifemetric.ui.theme.LocalAppColors
 import com.markbriz.lifemetric.ui.weight.WeightFormScreen
+import com.markbriz.lifemetric.ui.weight.WeightHowToScreen
 import com.markbriz.lifemetric.ui.weight.WeightScreen
 import com.markbriz.lifemetric.ui.welcome.WelcomeScreen
 import com.markbriz.lifemetric.ui.workout.WorkoutEntryFormScreen
@@ -197,17 +205,27 @@ fun LifeMetricApp(viewModel: AppViewModel) {
                         onEdit = { nav.navigate("bpForm/$it") },
                         onDelete = viewModel::deleteBloodPressure,
                         onEditBpWindow = { nav.navigate("profileBpWindow") },
+                        onEditBpTarget = { nav.navigate("profileBpTarget") },
+                        onHowToMeasure = { nav.navigate("bpHowTo") },
+                        onEditReminders = { nav.navigate("profileBpReminders") },
                     )
+                }
+                composable("bpHowTo") {
+                    BloodPressureMeasureScreen(onBack = { nav.popBackStack() })
                 }
                 composable("bpForm/{id}") { entry ->
                     val id = entry.arguments?.getString("id")
                     val existing = state.store.bloodPressureReadings.find { it.id == id }
                     BloodPressureFormScreen(
                         existing = existing,
+                        previous = if (existing == null) latestBloodPressure(state.store.bloodPressureReadings) else null,
                         missing = id != NEW && existing == null,
                         onBack = { nav.popBackStack() },
-                        onSave = { date, time, sys, dia, hr ->
-                            viewModel.saveBloodPressure(existing?.id, date, time, sys, dia, hr)
+                        onHowToMeasure = { nav.navigate("bpHowTo") },
+                        onSave = { draft ->
+                            viewModel.saveBloodPressure(existing?.id, draft)
+                        },
+                        onFinished = {
                             nav.popBackStack()
                             viewModel.showSaved()
                         },
@@ -221,19 +239,27 @@ fun LifeMetricApp(viewModel: AppViewModel) {
                         onDelete = viewModel::deleteWeight,
                         onEditHeight = { nav.navigate("profileHeight") },
                         onEditGoal = { nav.navigate("profileGoal") },
+                        onHowToWeigh = { nav.navigate("weightHowTo") },
+                        onEditReminders = { nav.navigate("profileWeightReminders") },
+                        onEditUnits = { nav.navigate("profileWeightUnits") },
+                        onEditWaist = { nav.navigate("profileWaist") },
                     )
+                }
+                composable("weightHowTo") {
+                    WeightHowToScreen(onBack = { nav.popBackStack() })
                 }
                 composable("weightForm/{id}") { entry ->
                     val id = entry.arguments?.getString("id")
                     val existing = state.store.weightRecords.find { it.id == id }
-                    val suggested = existing?.weight ?: latestWeight(state.store.weightRecords)?.weight ?: 150.0
                     WeightFormScreen(
                         existing = existing,
-                        suggested = suggested,
+                        lastWeight = latestWeight(state.store.weightRecords)?.weight,
+                        useKg = state.store.profile.weightDisplayKg,
                         missing = id != NEW && existing == null,
                         onBack = { nav.popBackStack() },
-                        onSave = { date, time, weight ->
-                            viewModel.saveWeight(existing?.id, date, time, weight)
+                        onHowToWeigh = { nav.navigate("weightHowTo") },
+                        onSave = { date, time, weight, tags, note ->
+                            viewModel.saveWeight(existing?.id, date, time, weight, tags, note)
                             nav.popBackStack()
                             viewModel.showSaved()
                         },
@@ -319,6 +345,11 @@ fun LifeMetricApp(viewModel: AppViewModel) {
                         onHeight = { nav.navigate("profileHeight") },
                         onGoal = { nav.navigate("profileGoal") },
                         onBpWindow = { nav.navigate("profileBpWindow") },
+                        onBpTarget = { nav.navigate("profileBpTarget") },
+                        onBpReminders = { nav.navigate("profileBpReminders") },
+                        onWeightReminders = { nav.navigate("profileWeightReminders") },
+                        onWeightUnits = { nav.navigate("profileWeightUnits") },
+                        onWaist = { nav.navigate("profileWaist") },
                         onTheme = { nav.navigate("profileTheme") },
                         onPlans = { nav.navigate("plans") },
                         exportSnapshot = viewModel::exportSnapshot,
@@ -354,6 +385,46 @@ fun LifeMetricApp(viewModel: AppViewModel) {
                         store = state.store,
                         themeId = state.themeId,
                         onSave = viewModel::saveProfile,
+                        onBack = { nav.popBackStack() },
+                        backLabel = profileEditorBackLabel(nav.previousBackStackEntry?.destination?.route),
+                    )
+                }
+                composable("profileBpTarget") {
+                    BpTargetEditorScreen(
+                        store = state.store,
+                        onSave = viewModel::saveBpTarget,
+                        onBack = { nav.popBackStack() },
+                        backLabel = profileEditorBackLabel(nav.previousBackStackEntry?.destination?.route),
+                    )
+                }
+                composable("profileBpReminders") {
+                    BpReminderEditorScreen(
+                        store = state.store,
+                        onSave = viewModel::saveBpReminders,
+                        onBack = { nav.popBackStack() },
+                        backLabel = profileEditorBackLabel(nav.previousBackStackEntry?.destination?.route),
+                    )
+                }
+                composable("profileWeightReminders") {
+                    WeightReminderEditorScreen(
+                        store = state.store,
+                        onSave = viewModel::saveWeightReminders,
+                        onBack = { nav.popBackStack() },
+                        backLabel = profileEditorBackLabel(nav.previousBackStackEntry?.destination?.route),
+                    )
+                }
+                composable("profileWeightUnits") {
+                    WeightUnitsEditorScreen(
+                        useKg = state.store.profile.weightDisplayKg,
+                        onSave = viewModel::saveWeightDisplayKg,
+                        onBack = { nav.popBackStack() },
+                        backLabel = profileEditorBackLabel(nav.previousBackStackEntry?.destination?.route),
+                    )
+                }
+                composable("profileWaist") {
+                    WaistEditorScreen(
+                        waistInches = state.store.profile.waistInches,
+                        onSave = viewModel::saveWaist,
                         onBack = { nav.popBackStack() },
                         backLabel = profileEditorBackLabel(nav.previousBackStackEntry?.destination?.route),
                     )
@@ -440,6 +511,8 @@ fun LifeMetricApp(viewModel: AppViewModel) {
 
 private fun profileEditorBackLabel(route: String?): String = when (route) {
     "bp" -> "Blood pressure"
+    "bpHowTo" -> "Blood pressure"
     "weight" -> "Weight"
+    "weightHowTo" -> "Weight"
     else -> "Profile"
 }
