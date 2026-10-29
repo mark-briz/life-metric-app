@@ -19,7 +19,6 @@ private val LOG_STEPS = listOf(
 fun WorkoutHowToScreen(onBack: () -> Unit) {
     val colors = LocalAppColors.current
     AppScreen(
-        eyebrow = "Workouts",
         title = "How to log",
         lead = "A complete session is more useful than a perfect one. This is not a training prescription.",
         onBack = onBack,

@@ -27,7 +27,6 @@ fun BloodPressureMeasureScreen(onBack: () -> Unit) {
     val colors = LocalAppColors.current
     val uriHandler = LocalUriHandler.current
     AppScreen(
-        eyebrow = "Blood pressure",
         title = "How to measure",
         lead = "American Heart Association steps for a home reading. This is not a diagnosis.",
         onBack = onBack,

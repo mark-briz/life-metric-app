@@ -119,21 +119,28 @@ Alternatively, copy the APK to the phone and open it from a file manager. Androi
 
 ## Release builds
 
-`assembleRelease` produces an unsigned APK because no signing config is checked in. To create an installable release build:
+Release signing is configured in `app/build.gradle.kts` and reads `keystore.properties` from the project root. That file and `*.jks` are git-ignored. Without it, `assembleRelease` still builds an unsigned APK.
 
-1. Create a keystore once:
+1. Create a keystore once (keep it outside the repo):
 
    ```powershell
-   keytool -genkeypair -v -keystore life-metric-release.jks -alias lifemetric -keyalg RSA -keysize 2048 -validity 10000
+   $env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
+   & "$env:JAVA_HOME\bin\keytool.exe" -genkeypair -v `
+     -keystore "$env:USERPROFILE\life-metric-release.jks" `
+     -alias lifemetric -keyalg RSA -keysize 2048 -validity 10000
    ```
 
-   Keep the keystore and passwords out of version control.
-2. Add a `signingConfigs { release { ... } }` block to `app/build.gradle.kts` (or sign with Android Studio → **Build → Generate Signed Bundle / APK…**), reading the paths and passwords from environment variables or an ignored `keystore.properties` file.
+2. Copy `keystore.properties.example` to `keystore.properties` and fill in the path, alias, and passwords.
+
 3. Build:
 
    ```powershell
    .\gradlew.bat :app:assembleRelease
    ```
+
+   Signed APK: `app/build/outputs/apk/release/app-release.apk`. Play Console AAB: `.\gradlew.bat :app:bundleRelease`.
+
+You can still sign with Android Studio → **Build → Generate Signed Bundle / APK…** instead of using `keystore.properties`.
 
 Code shrinking is currently disabled for release (`optimization { enable = false }` in `app/build.gradle.kts`).
 

@@ -26,22 +26,24 @@ import com.markbriz.lifemetric.data.Machine
 import com.markbriz.lifemetric.data.ParsedAccountExport
 import com.markbriz.lifemetric.data.buildAccountExport
 import com.markbriz.lifemetric.data.parseAccountExport
-import com.markbriz.lifemetric.domain.formatBloodPressureReminders
 import com.markbriz.lifemetric.domain.formatBloodPressureTarget
+import com.markbriz.lifemetric.domain.formatDate
 import com.markbriz.lifemetric.domain.formatHeight
+import com.markbriz.lifemetric.domain.formatRestTimerSetting
 import com.markbriz.lifemetric.domain.formatWaist
-import com.markbriz.lifemetric.domain.formatWeightReminder
-import com.markbriz.lifemetric.domain.formatWorkoutReminder
 import com.markbriz.lifemetric.domain.formatWeightWithUnit
 import com.markbriz.lifemetric.domain.weightUnit
 import com.markbriz.lifemetric.ui.components.AppScreen
 import com.markbriz.lifemetric.ui.components.ConfirmDeleteDialog
-import com.markbriz.lifemetric.ui.components.DangerOutlineButton
 import com.markbriz.lifemetric.ui.components.EmptyState
+import com.markbriz.lifemetric.ui.components.FormDelete
 import com.markbriz.lifemetric.ui.components.HistoryRow
 import com.markbriz.lifemetric.ui.components.LabeledField
+import com.markbriz.lifemetric.ui.components.MenuAction
 import com.markbriz.lifemetric.ui.components.MessageDialog
 import com.markbriz.lifemetric.ui.components.PrimaryButton
+import com.markbriz.lifemetric.ui.components.RecordFormScaffold
+import com.markbriz.lifemetric.ui.components.SecondaryButton
 import com.markbriz.lifemetric.ui.components.SectionTitle
 import com.markbriz.lifemetric.ui.components.SettingsRow
 import com.markbriz.lifemetric.ui.components.SurfaceCard
@@ -55,21 +57,19 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.Instant
 
+private const val APP_VERSION = "1.0.1"
+
 @Composable
 fun ProfileScreen(
     store: FitnessStore,
     themeId: String,
     onHeight: () -> Unit,
-    onGoal: () -> Unit,
-    onBpWindow: () -> Unit,
-    onBpTarget: () -> Unit,
-    onBpReminders: () -> Unit,
-    onWeightReminders: () -> Unit,
-    onWorkoutReminders: () -> Unit,
-    onWeightUnits: () -> Unit,
     onWaist: () -> Unit,
+    onUnits: () -> Unit,
+    onBpSettings: () -> Unit,
+    onWeightSettings: () -> Unit,
+    onWorkoutSettings: () -> Unit,
     onTheme: () -> Unit,
-    onPlans: () -> Unit,
     /** Returns the current tracking data and the saved theme id for export. */
     exportSnapshot: () -> Pair<FitnessStore, String>,
     /** Replaces the data on this device; reports an error message or null on success. */
@@ -135,77 +135,42 @@ fun ProfileScreen(
     }
     var confirmErase by remember { mutableStateOf(false) }
     var confirmEraseAgain by remember { mutableStateOf(false) }
-    val useKg = store.profile.weightDisplayKg
-    val start = store.weightRecords.find { it.id == store.profile.weightGoalStartId }
-    val startValue = start?.let { formatWeightWithUnit(it.weight, useKg) } ?: "Not selected"
+    val profile = store.profile
+    val useKg = profile.weightDisplayKg
+    val bpReminderCount = listOf(profile.bpMorningReminder, profile.bpEveningReminder).count { it }
+    val bpSummary = listOf(
+        if (profile.bpTargetSystolic != null) "Target ${formatBloodPressureTarget(profile.bpTargetSystolic, profile.bpTargetDiastolic)}" else "No target",
+        "avg ${profile.bpMovingAverageReadings}",
+        when (bpReminderCount) {
+            0 -> "reminders off"
+            1 -> "1 reminder"
+            else -> "$bpReminderCount reminders"
+        },
+    ).joinToString(" · ")
+    val start = store.weightRecords.find { it.id == profile.weightGoalStartId }
+    val weightSummary = listOf(
+        profile.weightGoalLb?.let { goal ->
+            "Goal ${formatWeightWithUnit(goal, useKg)}" + (start?.let { " from ${formatDate(it.date)}" } ?: "")
+        } ?: "No goal",
+        if (profile.weightMorningReminder) "reminder on" else "reminder off",
+    ).joinToString(" · ")
+    val workoutSummary = listOf(
+        "${store.plans.size} ${if (store.plans.size == 1) "plan" else "plans"}",
+        "rest ${formatRestTimerSetting(profile.workoutRestTimerSec)}",
+        if (profile.workoutMorningReminder) "reminder on" else "reminder off",
+    ).joinToString(" · ")
 
-    AppScreen(eyebrow = "App", title = "Profile", lead = "Height, goals, appearance, and data on this device.") {
-        SectionTitle("Personal")
-        SettingsRow("Height", "Used to calculate BMI on the Weight tab.", onHeight, formatHeight(store.profile.heightInches))
-        SectionTitle("Goals & charts")
-        SettingsRow(
-            "Weight goal",
-            "Target weight used on the Weight tab.",
-            onGoal,
-            store.profile.weightGoalLb?.let { formatWeightWithUnit(it, useKg) } ?: "Not set",
-        )
-        SettingsRow("Starting weight", "The scale reading this goal starts from.", onGoal, startValue)
-        SettingsRow(
-            "Display units",
-            "How weight is shown. Stored values stay in pounds.",
-            onWeightUnits,
-            weightUnit(useKg),
-        )
-        SettingsRow(
-            "Waist",
-            "Optional NHLBI waist comparison. Sex is not recorded.",
-            onWaist,
-            formatWaist(store.profile.waistInches),
-        )
-        SettingsRow(
-            "Weight reminders",
-            "Optional local morning reminder to log a scale reading.",
-            onWeightReminders,
-            formatWeightReminder(store.profile.weightMorningReminder, store.profile.weightMorningReminderTime),
-        )
-        SettingsRow(
-            "BP average window",
-            "How many recent readings the blood pressure chart averages.",
-            onBpWindow,
-            "${store.profile.bpMovingAverageReadings}",
-        )
-        SettingsRow(
-            "BP target",
-            "The numbers your clinician asked you to stay at or under.",
-            onBpTarget,
-            formatBloodPressureTarget(store.profile.bpTargetSystolic, store.profile.bpTargetDiastolic),
-        )
-        SettingsRow(
-            "BP reminders",
-            "Optional local morning and evening measurement reminders.",
-            onBpReminders,
-            formatBloodPressureReminders(
-                store.profile.bpMorningReminder,
-                store.profile.bpEveningReminder,
-                store.profile.bpMorningReminderTime,
-                store.profile.bpEveningReminderTime,
-            ),
-        )
+    AppScreen(title = "Profile") {
+        SectionTitle("You")
+        SettingsRow("Height", "Used to calculate BMI on the Weight tab.", onHeight, formatHeight(profile.heightInches))
+        SettingsRow("Waist", "Optional NHLBI waist comparison. Sex is not recorded.", onWaist, formatWaist(profile.waistInches))
+        SettingsRow("Units", "Body weight and lift weight. Stored values stay in pounds.", onUnits, weightUnit(useKg))
+        SectionTitle("Tracking")
+        SettingsRow("Blood pressure settings", bpSummary, onBpSettings)
+        SettingsRow("Weight settings", weightSummary, onWeightSettings)
+        SettingsRow("Workout settings", workoutSummary, onWorkoutSettings)
         SectionTitle("Appearance")
         SettingsRow("Theme", "Colors used across the app.", onTheme, themeById(themeId).label)
-        SectionTitle("Workouts")
-        SettingsRow(
-            "Plans",
-            "Create and edit fitness plans and their activities.",
-            onPlans,
-            "${store.plans.size}",
-        )
-        SettingsRow(
-            "Workout reminders",
-            "Optional local morning reminder to log today's session.",
-            onWorkoutReminders,
-            formatWorkoutReminder(store.profile.workoutMorningReminder, store.profile.workoutMorningReminderTime),
-        )
         SectionTitle("Data")
         SettingsRow(
             "Export data",
@@ -218,11 +183,15 @@ fun ProfileScreen(
             if (transferring == "load") "Loading data…" else "Replace the data on this device with a JSON file.",
             onClick = loadData,
         )
-        SectionTitle("Legal")
+        SettingsRow(
+            "Erase all data",
+            "Remove everything on this device. Starter plans are restored.",
+            onClick = { confirmErase = true },
+            destructive = true,
+        )
+        SectionTitle("About")
         SettingsRow("Health disclaimer", "Not medical advice, not a medical device, and not for emergencies.", onDisclaimer)
-        SectionTitle("App")
-        SettingsRow("About", "App name and current version.", onAbout)
-        DangerOutlineButton("Erase all data", onClick = { confirmErase = true })
+        SettingsRow("About", "App name and current version.", onAbout, APP_VERSION)
         Text("All data is stored only on this phone and is protected by your device lock.", color = colors.inkMuted, fontSize = 13.sp)
     }
     pendingImport?.let { imported ->
@@ -285,8 +254,7 @@ fun PlansScreen(
 ) {
     val colors = LocalAppColors.current
     AppScreen(
-        eyebrow = "Settings · Fitness plans",
-        title = "Your plans",
+        title = "Plans",
         lead = "Build activity lists for each training focus, then log sets against them.",
         onBack = onBack,
         backLabel = backLabel,
@@ -329,7 +297,6 @@ fun PlanFormScreen(
     existing: FitnessPlan?,
     missing: Boolean,
     onBack: () -> Unit,
-    backLabel: String = "Plans",
     onSave: (name: String, description: String, typeId: String) -> String?,
 ) {
     if (missing) {
@@ -344,11 +311,14 @@ fun PlanFormScreen(
     var familyOpen by remember { mutableStateOf(false) }
     var typeOpen by remember { mutableStateOf(false) }
     val isEdit = existing != null
-    AppScreen(
-        eyebrow = if (isEdit) "Edit plan" else "New plan",
-        title = if (isEdit) "Update plan" else "Create a plan",
-        onBack = onBack,
-        backLabel = backLabel,
+    val fields = listOf(name, description, typeId)
+    val initialFields = remember(existing?.id) { fields }
+    RecordFormScaffold(
+        title = if (isEdit) "Edit plan" else "New plan",
+        lead = if (isEdit) null else "A plan is a list of activities you repeat. Each workout logs sets against one plan.",
+        isDirty = fields != initialFields,
+        onClose = onBack,
+        onSave = { error = onSave(name, description, typeId) },
     ) {
         SurfaceCard {
             LabeledField("Name", name, { name = it }, error = error)
@@ -396,9 +366,6 @@ fun PlanFormScreen(
                 fontSize = 13.sp,
             )
             LabeledField("Description (optional)", description, { description = it }, singleLine = false, minLines = 3)
-            PrimaryButton(if (isEdit) "Save changes" else "Create plan", onClick = {
-                error = onSave(name, description, typeId)
-            })
         }
     }
 }
@@ -410,6 +377,8 @@ fun PlanDetailScreen(
     onAdd: () -> Unit,
     onEdit: (Machine) -> Unit,
     onDelete: (Machine) -> Unit,
+    onEditPlan: () -> Unit,
+    onStartWorkout: () -> Unit,
 ) {
     if (plan == null) {
         AppScreen(title = "Plan not found", lead = "That plan may have been deleted.", onBack = onBack, backLabel = "Plans") {}
@@ -417,15 +386,18 @@ fun PlanDetailScreen(
     }
     var pending by remember { mutableStateOf<Machine?>(null) }
     AppScreen(
-        eyebrow = "${ActivityCatalog.planLabel(plan)} · Fitness plan",
         title = plan.name,
-        lead = plan.description.ifBlank { "No description." },
+        lead = listOf(ActivityCatalog.planLabel(plan), plan.description.ifBlank { "No description." }).joinToString(" · "),
         onBack = onBack,
         backLabel = "Plans",
         showFab = true,
-        fabLabel = "Add an activity",
+        fabLabel = "Add activity",
         onFab = onAdd,
+        actions = listOf(MenuAction("Edit plan") { onEditPlan() }),
     ) {
+        if (plan.machines.isNotEmpty()) {
+            SecondaryButton("Start workout", onClick = onStartWorkout, contentDescription = "Start a workout with ${plan.name}")
+        }
         SectionTitle("Activities")
         if (plan.machines.isEmpty()) {
             EmptyState(
@@ -463,8 +435,9 @@ fun ActivityFormScreen(
     activityMissing: Boolean,
     existing: Machine?,
     onBack: () -> Unit,
-    backLabel: String = "Plan",
     onSave: (name: String, description: String) -> String?,
+    onDelete: (() -> Unit)? = null,
+    planName: String = "this plan",
 ) {
     if (planMissing) {
         AppScreen(title = "Plan not found", lead = "That plan may have been deleted.", onBack = onBack, backLabel = "Plans") {}
@@ -478,23 +451,34 @@ fun ActivityFormScreen(
     var description by remember(existing?.id) { mutableStateOf(existing?.description.orEmpty()) }
     var error by remember { mutableStateOf<String?>(null) }
     val isEdit = existing != null
-    AppScreen(
-        eyebrow = if (isEdit) "Edit activity" else "New activity",
-        title = if (isEdit) "Update activity" else "Add an activity",
-        onBack = onBack,
-        backLabel = backLabel,
+    val fields = listOf(name, description)
+    val initialFields = remember(existing?.id) { fields }
+    RecordFormScaffold(
+        title = if (isEdit) "Edit activity" else "Add activity",
+        isDirty = fields != initialFields,
+        onClose = onBack,
+        onSave = { error = onSave(name, description) },
+        delete = if (existing != null && onDelete != null) {
+            FormDelete(
+                title = "Remove this activity?",
+                body = "Remove ${existing.name} from $planName? Sets already logged keep their values.",
+                onConfirm = onDelete,
+                label = "Remove",
+            )
+        } else {
+            null
+        },
     ) {
         SurfaceCard {
             LabeledField("Name", name, { name = it }, error = error)
             LabeledField("Description (optional)", description, { description = it }, singleLine = false, minLines = 3)
-            PrimaryButton(if (isEdit) "Save activity" else "Add activity", onClick = { error = onSave(name, description) })
         }
     }
 }
 
 @Composable
 fun LegalScreen(title: String, body: String, onBack: () -> Unit) {
-    AppScreen(eyebrow = "Legal", title = title, onBack = onBack, backLabel = "Profile") {
+    AppScreen(title = title, onBack = onBack, backLabel = "Profile") {
         SurfaceCard {
             Text(body, color = LocalAppColors.current.ink, fontSize = 14.sp, lineHeight = 20.sp)
         }
@@ -504,11 +488,11 @@ fun LegalScreen(title: String, body: String, onBack: () -> Unit) {
 @Composable
 fun AboutScreen(onBack: () -> Unit) {
     val colors = LocalAppColors.current
-    AppScreen(eyebrow = "App", title = "About", lead = "Life Metric version on this device.", onBack = onBack, backLabel = "Profile") {
+    AppScreen(title = "About", lead = "Life Metric version on this device.", onBack = onBack, backLabel = "Profile") {
         SurfaceCard {
             Text("Life Metric", color = colors.ink, fontSize = 28.sp, fontWeight = FontWeight.Bold)
             Text("VERSION", color = colors.inkMuted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.sp)
-            Text("1.0.1", color = colors.ink, fontSize = 32.sp, fontWeight = FontWeight.ExtraBold)
+            Text(APP_VERSION, color = colors.ink, fontSize = 32.sp, fontWeight = FontWeight.ExtraBold)
             Text("Data is stored only on this device.", color = colors.inkMuted)
         }
     }

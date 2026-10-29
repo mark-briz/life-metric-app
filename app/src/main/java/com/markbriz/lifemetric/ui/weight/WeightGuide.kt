@@ -20,7 +20,6 @@ private val WEIGH_STEPS = listOf(
 fun WeightHowToScreen(onBack: () -> Unit) {
     val colors = LocalAppColors.current
     AppScreen(
-        eyebrow = "Weight",
         title = "How to weigh",
         lead = "Same conditions each day make the trend meaningful. This is not a diagnosis.",
         onBack = onBack,

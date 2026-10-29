@@ -26,6 +26,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -44,6 +46,8 @@ import com.markbriz.lifemetric.domain.filterWeightRecords
 import com.markbriz.lifemetric.domain.formatDate
 import com.markbriz.lifemetric.domain.formatTime
 import com.markbriz.lifemetric.domain.formatWaistCaption
+import com.markbriz.lifemetric.domain.formatWeight
+import com.markbriz.lifemetric.domain.heightParts
 import com.markbriz.lifemetric.domain.formatWeightGoalEta
 import com.markbriz.lifemetric.domain.formatWeightHistoryLine
 import com.markbriz.lifemetric.domain.formatWeightRateCaption
@@ -74,17 +78,31 @@ import com.markbriz.lifemetric.domain.weightUnit
 import com.markbriz.lifemetric.domain.weightWeeklyRate
 import com.markbriz.lifemetric.ui.profile.shareWeightReport
 import kotlin.math.roundToInt
+import com.markbriz.lifemetric.ui.components.ActiveFilter
+import com.markbriz.lifemetric.ui.components.AddDetails
 import com.markbriz.lifemetric.ui.components.AppScreen
 import com.markbriz.lifemetric.ui.components.BmiGauge
 import com.markbriz.lifemetric.ui.components.ChoiceChip
 import com.markbriz.lifemetric.ui.components.ConfirmDeleteDialog
 import com.markbriz.lifemetric.ui.components.DateTimeFields
 import com.markbriz.lifemetric.ui.components.EmptyState
+import com.markbriz.lifemetric.ui.components.FilterBar
+import com.markbriz.lifemetric.ui.components.FilterSection
+import com.markbriz.lifemetric.ui.components.FilterSheet
+import com.markbriz.lifemetric.ui.components.FormDelete
+import com.markbriz.lifemetric.ui.components.FormSheet
 import com.markbriz.lifemetric.ui.components.GhostButton
+import com.markbriz.lifemetric.ui.components.HeroHeader
 import com.markbriz.lifemetric.ui.components.HistoryRow
 import com.markbriz.lifemetric.ui.components.LabeledField
+import com.markbriz.lifemetric.ui.components.LastTimeSuggestion
+import com.markbriz.lifemetric.ui.components.MenuAction
 import com.markbriz.lifemetric.ui.components.PrimaryButton
+import com.markbriz.lifemetric.ui.components.RecordFormScaffold
 import com.markbriz.lifemetric.ui.components.SectionTitle
+import com.markbriz.lifemetric.ui.components.Segment
+import com.markbriz.lifemetric.ui.components.SegmentedChoice
+import com.markbriz.lifemetric.ui.components.SheetTitle
 import com.markbriz.lifemetric.ui.components.SurfaceCard
 import com.markbriz.lifemetric.ui.components.TextLink
 import com.markbriz.lifemetric.ui.components.WeightChart
@@ -98,12 +116,12 @@ fun WeightScreen(
     onAdd: () -> Unit,
     onEdit: (String) -> Unit,
     onDelete: (String) -> Unit,
-    onEditHeight: () -> Unit,
     onEditGoal: () -> Unit,
     onHowToWeigh: () -> Unit,
-    onEditReminders: () -> Unit,
-    onEditUnits: () -> Unit = {},
-    onEditWaist: () -> Unit = {},
+    onSettings: () -> Unit,
+    highlightedId: String? = null,
+    /** Saves height and waist together; returns an error message or null. */
+    onSaveBodyMeasures: (feet: String, inches: String, waist: String) -> String?,
 ) {
     val colors = LocalAppColors.current
     val context = LocalContext.current
@@ -116,6 +134,10 @@ fun WeightScreen(
     var listRange by remember { mutableStateOf(WeightChartRange.All) }
     var tagFilters by remember { mutableStateOf(setOf<String>()) }
     var visibleCount by remember { mutableIntStateOf(HISTORY_PAGE) }
+    var filterOpen by remember { mutableStateOf(false) }
+    var bodyOpen by remember { mutableStateOf(false) }
+    val filterFocus = remember { FocusRequester() }
+    val bodyFocus = remember { FocusRequester() }
     val filtered = remember(store.weightRecords, listRange, tagFilters) {
         filterWeightRecords(sorted, listRange, tagFilters)
     }
@@ -131,88 +153,93 @@ fun WeightScreen(
     val bmi = if (latest != null && height != null) calculateBmi(latest.weight, height) else Double.NaN
     val goalBmi = if (height != null && store.profile.weightGoalLb != null) calculateBmi(store.profile.weightGoalLb, height) else Double.NaN
     val showTrend = latest != null && store.weightRecords.size >= 2 && trend != null
+    val setRange: (WeightChartRange) -> Unit = {
+        listRange = it
+        visibleCount = HISTORY_PAGE
+    }
+    val toggleTag: (String) -> Unit = { tagId ->
+        tagFilters = if (tagId in tagFilters) tagFilters - tagId else tagFilters + tagId
+        visibleCount = HISTORY_PAGE
+    }
+    val clearFilters: () -> Unit = {
+        listRange = WeightChartRange.All
+        tagFilters = emptySet()
+        visibleCount = HISTORY_PAGE
+    }
+    val activeFilters = buildList {
+        listRange.days?.let { days -> add(ActiveFilter("Last $days days") { setRange(WeightChartRange.All) }) }
+        WeightTag.entries.filter { it.id in tagFilters }.forEach { tag ->
+            add(ActiveFilter(tag.label) { toggleTag(tag.id) })
+        }
+    }
+
+    val shareLog: () -> Unit = {
+        val inRange = weightRecordsInRange(store.weightRecords, chartRange)
+        shareWeightReport(
+            context,
+            buildWeightReport(inRange, generatedAt = "${formatDate(todayIso())} ${formatTime(nowTime())}"),
+            buildWeightCsv(inRange),
+        )
+    }
 
     AppScreen(
-        eyebrow = "Body weight",
         title = "Weight",
-        lead = "Track scale readings over time.",
         showFab = true,
         fabLabel = "Record weight",
         onFab = onAdd,
+        actions = listOfNotNull(
+            MenuAction("How to weigh") { onHowToWeigh() },
+            if (store.weightRecords.isNotEmpty()) MenuAction("Share log") { shareLog() } else null,
+            MenuAction("Weight settings") { onSettings() },
+        ),
     ) {
         if (latest == null) {
             EmptyState(
                 "No weights recorded",
                 "Record your first scale reading to start the history chart.",
-            ) {
-                PrimaryButton("Record weight", onClick = onAdd)
-                TextLink("How to weigh", onHowToWeigh)
-                TextLink("Reminders", onEditReminders)
-                TextLink("Display units", onEditUnits)
-            }
+                "Record weight",
+                onAdd,
+            )
         } else {
+            SurfaceCard { WeightHero(store.weightRecords, useKg) }
+            SectionTitle("Trend")
             SurfaceCard {
-                if (showTrend) {
-                    Text("7-DAY TREND", color = colors.inkMuted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.1.sp)
-                    Text(formatWeightWithUnit(trend ?: latest.weight, useKg), color = colors.ink, fontSize = 40.sp, fontWeight = FontWeight.ExtraBold)
-                    Text("last ${formatWeightWithUnit(latest.weight, useKg)} · ${formatDate(latest.date)} · ${formatTime(latest.time)}", color = colors.inkMuted)
-                    if (trendDelta != null) {
-                        Text(
-                            formatWeightTrendDelta(trendDelta, useKg),
-                            color = if (trendDelta <= 0) colors.success else colors.accent,
-                            fontWeight = FontWeight.Medium,
-                        )
-                    }
-                } else {
-                    Text("LAST RECORDED WEIGHT", color = colors.inkMuted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.1.sp)
-                    Text(formatWeightWithUnit(latest.weight, useKg), color = colors.ink, fontSize = 40.sp, fontWeight = FontWeight.ExtraBold)
-                    Text("${formatDate(latest.date)} · ${formatTime(latest.time)}", color = colors.inkMuted)
-                }
-            }
-        }
-        if (store.weightRecords.isNotEmpty()) {
-            SectionTitle("History")
-            SurfaceCard {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    WeightChartRange.hubChoices.forEach { range ->
-                        ChoiceChip(range.label, selected = chartRange == range, onClick = { chartRange = range })
-                    }
-                }
+                SegmentedChoice(
+                    segments = WeightChartRange.hubChoices.map { range ->
+                        Segment(range, range.label, range.days?.let { "Last $it days" } ?: "All days")
+                    },
+                    selected = chartRange,
+                    onSelect = { chartRange = it },
+                    unitLabel = "Days",
+                )
                 if (chart != null && chart.points.isNotEmpty()) {
                     WeightChart(chart, store.profile.weightGoalLb, useKg)
                 } else {
                     Text("No daily lows in this range. Try a longer window.", color = colors.inkMuted)
                 }
-                TextLink("How to weigh", onHowToWeigh)
-                TextLink("Share log", onClick = {
-                    val inRange = weightRecordsInRange(store.weightRecords, chartRange)
-                    shareWeightReport(
-                        context,
-                        buildWeightReport(inRange, generatedAt = "${formatDate(todayIso())} ${formatTime(nowTime())}"),
-                        buildWeightCsv(inRange),
-                    )
-                }, contentDescription = "Share weight log")
-                TextLink("Reminders", onEditReminders)
-                TextLink("Display units", onEditUnits)
             }
         }
-        SectionTitle("Weight target")
+        SectionTitle("Goal")
         WeightTargetSection(store, onEditGoal, useKg)
         if (latest != null) {
-            SectionTitle("Body Mass Index")
+            SectionTitle("Body measures")
             if (height != null) {
                 SurfaceCard {
                     BmiGauge(bmi, goalBmi)
                     Text(formatWaistCaption(store.profile.waistInches), color = colors.inkMuted, fontSize = 13.sp, lineHeight = 18.sp)
-                    TextLink("Waist", onEditWaist)
+                    TextLink(
+                        "Edit",
+                        onClick = { bodyOpen = true },
+                        contentDescription = "Edit height and waist",
+                        modifier = Modifier.focusRequester(bodyFocus),
+                    )
                 }
             } else {
                 EmptyState(
                     "Height needed for BMI",
                     "Add your height so BMI can be calculated from the latest weight.",
                     "Set height",
-                    onEditHeight,
-                )
+                ) { bodyOpen = true }
             }
         }
         if (sorted.isNotEmpty()) {
@@ -222,23 +249,10 @@ fun WeightScreen(
                     if (index == 0) null else record.id to chronological[index - 1].weight
                 }.toMap()
             }
-            SectionTitle("Recent readings")
-            WeightRangeChipRow(
-                selected = listRange,
-                onSelect = {
-                    listRange = it
-                    visibleCount = HISTORY_PAGE
-                },
-            )
-            if (usedTags.isNotEmpty()) {
-                WeightTagFilterRow(
-                    tags = usedTags,
-                    selected = tagFilters,
-                    onToggle = { tagId ->
-                        tagFilters = if (tagId in tagFilters) tagFilters - tagId else tagFilters + tagId
-                        visibleCount = HISTORY_PAGE
-                    },
-                )
+            SectionTitle("History")
+            FilterBar(activeFilters, onOpen = { filterOpen = true }, onClearAll = clearFilters, openerFocus = filterFocus)
+            if (filtered.isEmpty()) {
+                Text("No readings match these filters.", color = colors.inkMuted)
             }
             recent.forEach { record ->
                 HistoryRow(
@@ -248,12 +262,47 @@ fun WeightScreen(
                     trailing = { WeightChangeArrow(record.weight, previousWeightById[record.id]) },
                     overflowLabel = "Delete",
                     onOverflow = { pending = record },
+                    highlighted = record.id == highlightedId,
                 )
             }
             if (recent.size < filtered.size) {
                 TextLink("Show older", onClick = { visibleCount += HISTORY_PAGE })
             }
         }
+    }
+    if (filterOpen) {
+        FilterSheet(
+            resultSummary = "Showing ${filtered.size} of ${sorted.size} readings.",
+            onDismiss = { filterOpen = false },
+            onClearAll = clearFilters,
+            returnFocus = filterFocus,
+        ) {
+            FilterSection("Range") {
+                WeightChartRange.hubChoices.forEach { range ->
+                    ChoiceChip(
+                        range.days?.let { "$it days" } ?: "All",
+                        selected = listRange == range,
+                        onClick = { setRange(range) },
+                    )
+                }
+            }
+            if (usedTags.isNotEmpty()) {
+                FilterSection("Tags") {
+                    usedTags.forEach { tag ->
+                        ChoiceChip(tag.label, selected = tag.id in tagFilters, onClick = { toggleTag(tag.id) })
+                    }
+                }
+            }
+        }
+    }
+    if (bodyOpen) {
+        BodyMeasuresSheet(
+            heightInches = height,
+            waistInches = store.profile.waistInches,
+            onSave = onSaveBodyMeasures,
+            onDismiss = { bodyOpen = false },
+            returnFocus = bodyFocus,
+        )
     }
     pending?.let { record ->
         ConfirmDeleteDialog(
@@ -262,6 +311,43 @@ fun WeightScreen(
             onConfirm = { onDelete(record.id); pending = null },
             onDismiss = { pending = null },
         )
+    }
+}
+
+@Composable
+private fun BodyMeasuresSheet(
+    heightInches: Int?,
+    waistInches: Double?,
+    onSave: (feet: String, inches: String, waist: String) -> String?,
+    onDismiss: () -> Unit,
+    returnFocus: FocusRequester? = null,
+) {
+    val colors = LocalAppColors.current
+    val parts = heightParts(heightInches)
+    var feet by remember { mutableStateOf(parts.first) }
+    var inches by remember { mutableStateOf(parts.second) }
+    var waist by remember { mutableStateOf(waistInches?.let { formatWeight(it) }.orEmpty()) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val initial = remember { listOf(feet, inches, waist) }
+    FormSheet(onDismiss = onDismiss, isDirty = { listOf(feet, inches, waist) != initial }, returnFocus = returnFocus) { close, requestClose ->
+        SheetTitle("Body measures", "Height is used for BMI. Waist is optional.")
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            LabeledField("Feet", feet, { feet = it.filter(Char::isDigit) }, Modifier.weight(1f), hint = "e.g. 5", keyboardType = KeyboardType.Number)
+            LabeledField("Inches", inches, { inches = it.filter(Char::isDigit) }, Modifier.weight(1f), hint = "0–11", keyboardType = KeyboardType.Number)
+        }
+        LabeledField("Waist (in)", waist, { waist = it }, hint = "Leave blank to clear.", keyboardType = KeyboardType.Decimal)
+        if (error != null) Text(error!!, color = colors.danger)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            GhostButton("Cancel", requestClose, Modifier.weight(1f))
+            PrimaryButton(
+                "Save",
+                onClick = {
+                    error = onSave(feet, inches, waist)
+                    if (error == null) close()
+                },
+                modifier = Modifier.weight(1f),
+            )
+        }
     }
 }
 
@@ -364,6 +450,7 @@ fun WeightFormScreen(
     onBack: () -> Unit,
     onHowToWeigh: () -> Unit,
     onSave: (date: String, time: String, weight: Double, tags: List<String>, note: String) -> Unit,
+    onDelete: (() -> Unit)? = null,
 ) {
     if (missing) {
         AppScreen(title = "Reading not found", lead = "That weight reading may have been deleted.", onBack = onBack, backLabel = "Weight") {}
@@ -376,21 +463,52 @@ fun WeightFormScreen(
     var selectedTags by remember(existing?.id) { mutableStateOf(existing?.tags?.toSet().orEmpty()) }
     var note by remember(existing?.id) { mutableStateOf(existing?.note.orEmpty()) }
     var error by remember { mutableStateOf<String?>(null) }
+    var detailsOpen by remember(existing?.id) {
+        mutableStateOf(existing?.tags?.isNotEmpty() == true || existing?.note?.isNotBlank() == true)
+    }
     val isEdit = existing != null
+    val fields = listOf(date, time, weight, selectedTags.sorted().joinToString(","), note)
+    val initialFields = remember(existing?.id) { fields }
     fun stepWeight(delta: Double) {
         val currentLb = parseWeightInput(weight, useKg) ?: lastWeight ?: return
         weight = formatWeightValue(stepDisplayedWeight(currentLb, delta, useKg), useKg)
     }
-    AppScreen(
-        eyebrow = "Weight / ${if (isEdit) "Edit" else "New"}",
+    val submit: () -> Unit = {
+        val parsed = parseWeightInput(weight, useKg)
+        error = when {
+            date.isBlank() -> "Date is required."
+            time.isBlank() -> "Time is required."
+            else -> validateWeightLb(parsed)
+        }
+        if (error == null && parsed != null) onSave(date, time, parsed, selectedTags.toList(), note.trim())
+    }
+    RecordFormScaffold(
         title = if (isEdit) "Edit weight" else "Record weight",
         lead = "Date and time default to now. Adjust weight by 0.1 $unit.",
-        onBack = onBack,
-        backLabel = "Weight",
+        isDirty = fields != initialFields,
+        onClose = onBack,
+        onSave = submit,
+        actions = listOf(MenuAction("How to weigh") { onHowToWeigh() }),
+        delete = if (existing != null && onDelete != null) {
+            FormDelete(
+                title = "Delete this reading?",
+                body = "Delete the ${formatDate(existing.date)} reading of ${formatWeightWithUnit(existing.weight, useKg)}?",
+                onConfirm = onDelete,
+            )
+        } else {
+            null
+        },
     ) {
         SurfaceCard {
             DateTimeFields(date, time, { date = it }, { time = it })
             Text("Weight ($unit)", color = LocalAppColors.current.inkMuted, fontWeight = FontWeight.Medium)
+            if (!isEdit && lastWeight != null) {
+                LastTimeSuggestion(
+                    "Last time: ${formatWeightWithUnit(lastWeight, useKg)}.",
+                    onUse = { weight = formatWeightValue(lastWeight, useKg) },
+                    useDescription = "Use last weight",
+                )
+            }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 GhostButton(
                     "−",
@@ -403,11 +521,7 @@ fun WeightFormScreen(
                     onValueChange = { weight = it },
                     modifier = Modifier.weight(1f),
                     error = error,
-                    hint = when {
-                        !isEdit && lastWeight != null -> "Last time: ${formatWeightWithUnit(lastWeight, useKg)}."
-                        !isEdit -> "Type the number from the scale."
-                        else -> "Use − / + to adjust by 0.1 $unit."
-                    },
+                    hint = if (isEdit) "Use − / + to adjust by 0.1 $unit." else "Type the number from the scale.",
                     keyboardType = KeyboardType.Decimal,
                 )
                 GhostButton(
@@ -416,45 +530,25 @@ fun WeightFormScreen(
                     contentDescription = "Increase weight",
                 )
             }
-            Text("Tags", color = LocalAppColors.current.inkMuted, fontWeight = FontWeight.Medium, fontSize = 13.sp)
-            WeightTagChipRow(
-                selected = selectedTags,
-                onToggle = { tagId ->
-                    selectedTags = if (tagId in selectedTags) selectedTags - tagId else selectedTags + tagId
-                },
-            )
-            LabeledField(
-                "Note",
-                note,
-                { note = it.take(160) },
-                hint = "Optional one-line note",
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                GhostButton("Cancel", onBack, Modifier.weight(1f))
-                PrimaryButton(if (isEdit) "Save changes" else "Save weight", modifier = Modifier.weight(1f), onClick = {
-                    val parsed = parseWeightInput(weight, useKg)
-                    error = when {
-                        date.isBlank() -> "Date is required."
-                        time.isBlank() -> "Time is required."
-                        else -> validateWeightLb(parsed)
-                    }
-                    if (error == null && parsed != null) onSave(date, time, parsed, selectedTags.toList(), note.trim())
-                })
+            AddDetails(
+                expanded = detailsOpen,
+                onToggle = { detailsOpen = !detailsOpen },
+                label = if (selectedTags.isEmpty() && note.isBlank()) "Add details" else "Details",
+            ) {
+                Text("Tags", color = LocalAppColors.current.inkMuted, fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                WeightTagChipRow(
+                    selected = selectedTags,
+                    onToggle = { tagId ->
+                        selectedTags = if (tagId in selectedTags) selectedTags - tagId else selectedTags + tagId
+                    },
+                )
+                LabeledField(
+                    "Note",
+                    note,
+                    { note = it.take(160) },
+                    hint = "Optional one-line note",
+                )
             }
-            TextLink("How to weigh", onHowToWeigh)
-        }
-    }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun WeightRangeChipRow(
-    selected: WeightChartRange,
-    onSelect: (WeightChartRange) -> Unit,
-) {
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        WeightChartRange.hubChoices.forEach { range ->
-            ChoiceChip(range.label, selected = selected == range, onClick = { onSelect(range) })
         }
     }
 }
@@ -472,16 +566,28 @@ private fun WeightTagChipRow(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
+/** Hero content for the hub card; the Home card reuses it so both read the same. */
 @Composable
-private fun WeightTagFilterRow(
-    tags: List<WeightTag>,
-    selected: Set<String>,
-    onToggle: (String) -> Unit,
-) {
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        tags.forEach { tag ->
-            ChoiceChip(tag.label, selected = tag.id in selected, onClick = { onToggle(tag.id) })
-        }
+fun WeightHero(records: List<WeightRecord>, useKg: Boolean) {
+    val colors = LocalAppColors.current
+    val latest = latestWeight(records) ?: return
+    val trend = latestWeightTrend(records)
+    val trendDelta = weightTrendDelta(records)
+    val showTrend = records.size >= 2 && trend != null
+    HeroHeader(
+        if (showTrend) "7-day trend" else "Latest",
+        formatWeightWithUnit(if (showTrend) trend ?: latest.weight else latest.weight, useKg),
+        valueSize = 40.sp,
+    )
+    Text(
+        "Last: ${formatWeightWithUnit(latest.weight, useKg)} · ${formatDate(latest.date)} · ${formatTime(latest.time)}",
+        color = colors.inkMuted,
+    )
+    if (showTrend && trendDelta != null) {
+        Text(
+            formatWeightTrendDelta(trendDelta, useKg),
+            color = if (trendDelta <= 0) colors.successText else colors.accentText,
+            fontWeight = FontWeight.Medium,
+        )
     }
 }

@@ -1,11 +1,11 @@
 package com.markbriz.lifemetric.ui.bp
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -16,6 +16,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -57,18 +58,32 @@ import com.markbriz.lifemetric.domain.latestBloodPressure
 import com.markbriz.lifemetric.domain.nowTime
 import com.markbriz.lifemetric.domain.todayIso
 import com.markbriz.lifemetric.domain.validateBloodPressureReading
+import com.markbriz.lifemetric.ui.components.ActiveFilter
+import com.markbriz.lifemetric.ui.components.AddDetails
 import com.markbriz.lifemetric.ui.components.AppScreen
 import com.markbriz.lifemetric.ui.components.BloodPressureChart
+import com.markbriz.lifemetric.ui.components.BloodPressureZoneChart
 import com.markbriz.lifemetric.ui.components.BpBadge
+import com.markbriz.lifemetric.ui.components.BpGauge
 import com.markbriz.lifemetric.ui.components.ChoiceChip
 import com.markbriz.lifemetric.ui.components.ConfirmDeleteDialog
+import com.markbriz.lifemetric.ui.components.ConfirmDialog
 import com.markbriz.lifemetric.ui.components.DateTimeFields
 import com.markbriz.lifemetric.ui.components.EmptyState
-import com.markbriz.lifemetric.ui.components.GhostButton
+import com.markbriz.lifemetric.ui.components.FilterBar
+import com.markbriz.lifemetric.ui.components.FilterSection
+import com.markbriz.lifemetric.ui.components.FilterSheet
+import com.markbriz.lifemetric.ui.components.FormDelete
+import com.markbriz.lifemetric.ui.components.HeroHeader
 import com.markbriz.lifemetric.ui.components.HistoryRow
 import com.markbriz.lifemetric.ui.components.LabeledField
+import com.markbriz.lifemetric.ui.components.LastTimeSuggestion
+import com.markbriz.lifemetric.ui.components.MenuAction
 import com.markbriz.lifemetric.ui.components.PrimaryButton
+import com.markbriz.lifemetric.ui.components.RecordFormScaffold
 import com.markbriz.lifemetric.ui.components.SectionTitle
+import com.markbriz.lifemetric.ui.components.Segment
+import com.markbriz.lifemetric.ui.components.SegmentedChoice
 import com.markbriz.lifemetric.ui.components.SurfaceCard
 import com.markbriz.lifemetric.ui.components.TextLink
 import com.markbriz.lifemetric.ui.profile.shareBloodPressureReport
@@ -76,6 +91,8 @@ import com.markbriz.lifemetric.ui.theme.LocalAppColors
 import kotlinx.coroutines.delay
 
 private const val HISTORY_PAGE = 30
+
+private enum class BpTrendView { Chart, Category }
 
 @Composable
 fun BloodPressureScreen(
@@ -86,7 +103,8 @@ fun BloodPressureScreen(
     onEditBpWindow: () -> Unit,
     onEditBpTarget: () -> Unit,
     onHowToMeasure: () -> Unit,
-    onEditReminders: () -> Unit,
+    onSettings: () -> Unit,
+    highlightedId: String? = null,
 ) {
     val colors = LocalAppColors.current
     val context = LocalContext.current
@@ -97,9 +115,12 @@ fun BloodPressureScreen(
         store.profile.bpTargetDiastolic,
     )
     var chartRange by remember { mutableStateOf(BloodPressureChartRange.Last10) }
+    var trendView by remember { mutableStateOf(BpTrendView.Chart) }
     var periodFilter by remember { mutableStateOf<BloodPressurePeriod?>(null) }
     var tagFilters by remember { mutableStateOf(setOf<String>()) }
     var visibleCount by remember { mutableIntStateOf(HISTORY_PAGE) }
+    var filterOpen by remember { mutableStateOf(false) }
+    val filterFocus = remember { FocusRequester() }
     val trend = chartBloodPressure(store.bloodPressureReadings, chartRange)
     val sorted = remember(store.bloodPressureReadings) {
         store.bloodPressureReadings.sortedWith(
@@ -111,142 +132,163 @@ fun BloodPressureScreen(
     val usedTags = BloodPressureTag.entries.filter { tag ->
         tag.id in tagFilters || store.bloodPressureReadings.any { tag.id in it.tags }
     }
+    val setPeriod: (BloodPressurePeriod?) -> Unit = {
+        periodFilter = it
+        visibleCount = HISTORY_PAGE
+    }
+    val toggleTag: (String) -> Unit = { tagId ->
+        tagFilters = if (tagId in tagFilters) tagFilters - tagId else tagFilters + tagId
+        visibleCount = HISTORY_PAGE
+    }
+    val clearFilters: () -> Unit = {
+        periodFilter = null
+        tagFilters = emptySet()
+        visibleCount = HISTORY_PAGE
+    }
+    val activeFilters = buildList {
+        periodFilter?.let { period -> add(ActiveFilter(period.label) { setPeriod(null) }) }
+        BloodPressureTag.entries.filter { it.id in tagFilters }.forEach { tag ->
+            add(ActiveFilter(tag.label) { toggleTag(tag.id) })
+        }
+    }
     var pending by remember { mutableStateOf<BloodPressureReading?>(null) }
+    val shareReport: () -> Unit = {
+        shareBloodPressureReport(
+            context,
+            buildBloodPressureReport(
+                store.bloodPressureReadings,
+                store.profile.bpTargetSystolic,
+                store.profile.bpTargetDiastolic,
+                generatedAt = "${formatDate(todayIso())} ${formatTime(nowTime())}",
+            ),
+            buildBloodPressureCsv(store.bloodPressureReadings),
+        )
+    }
 
     AppScreen(
-        eyebrow = "Vitals",
         title = "Blood pressure",
-        lead = "Track systolic and diastolic readings over time.",
         showFab = true,
         fabLabel = "Add reading",
         onFab = onAdd,
+        actions = listOfNotNull(
+            MenuAction("How to measure") { onHowToMeasure() },
+            if (store.bloodPressureReadings.isNotEmpty()) MenuAction("Share report") { shareReport() } else null,
+            MenuAction("Blood pressure settings") { onSettings() },
+        ),
     ) {
         if (latest == null) {
             EmptyState(
                 "No blood pressure readings yet",
                 "Add a reading with date, time, systolic, and diastolic. Heart rate is optional.",
-            ) {
-                PrimaryButton("Add your first reading", onClick = onAdd)
-                TextLink("How to measure", onHowToMeasure)
-                TextLink("Reminders", onEditReminders)
-            }
-        } else {
-            val status = bloodPressureStatus(latest.systolic, latest.diastolic)
-            val delta = bloodPressureDelta(store.bloodPressureReadings)
-            SurfaceCard {
-                Text("MOST RECENT READING", color = colors.inkMuted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.1.sp)
-                Text(formatBloodPressure(latest.systolic, latest.diastolic, latest.heartRate), color = colors.ink, fontSize = 28.sp, fontWeight = FontWeight.ExtraBold)
-                if (delta != null) {
-                    Text(
-                        formatBloodPressureDelta(delta),
-                        color = when {
-                            delta.systolic == 0 && delta.diastolic == 0 -> colors.inkMuted
-                            delta.systolic <= 0 && delta.diastolic <= 0 -> colors.success
-                            else -> colors.accent
+                "Add your first reading",
+                onAdd,
+            )
+            return@AppScreen
+        }
+        SurfaceCard { BloodPressureHero(latest, store.bloodPressureReadings) }
+
+        SectionTitle("Trend")
+        SurfaceCard {
+            SegmentedChoice(
+                segments = listOf(
+                    Segment(BpTrendView.Chart, "Chart", "Trend chart"),
+                    Segment(BpTrendView.Category, "Category", "Category view of the latest reading"),
+                ),
+                selected = trendView,
+                onSelect = { trendView = it },
+            )
+            when (trendView) {
+                BpTrendView.Chart -> {
+                    SegmentedChoice(
+                        segments = BloodPressureChartRange.entries.map { range ->
+                            Segment(range, range.label, range.limit?.let { "Last $it readings" } ?: "All readings")
                         },
-                        fontWeight = FontWeight.Medium,
+                        selected = chartRange,
+                        onSelect = { chartRange = it },
+                        unitLabel = "Readings",
                     )
-                }
-                Text(formatDerivedBloodPressure(latest.systolic, latest.diastolic), color = colors.inkMuted, fontSize = 13.sp)
-                BpBadge(status, systolic = latest.systolic, diastolic = latest.diastolic)
-                LowBpHint(latest.systolic, latest.diastolic)
-                if (status == BpStatus.Severe) {
-                    Text(
-                        "Wait 1 minute and take it again. Call your health care professional if it stays this high. Call 911 if you have chest pain, shortness of breath, back pain, numbness, weakness, vision changes, or trouble speaking.",
-                        color = colors.danger,
-                        fontWeight = FontWeight.Medium,
-                        fontSize = 13.sp,
-                    )
-                }
-                Text("${formatDate(latest.date)} · ${formatTime(latest.time)} · ${bloodPressurePeriod(latest).label}", color = colors.inkMuted)
-            }
-        }
-        if (summary != null) {
-            SectionTitle("Visit summary")
-            VisitSummaryCard(summary, onEditBpTarget)
-        }
-        if (store.bloodPressureReadings.isNotEmpty()) {
-            SectionTitle("History")
-            SurfaceCard {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    BloodPressureChartRange.entries.forEach { range ->
-                        ChoiceChip(range.label, selected = chartRange == range, onClick = { chartRange = range })
+                    if (trend.size > 1) {
+                        BloodPressureChart(trend, store.bloodPressureReadings, store.profile.bpMovingAverageReadings)
+                    } else {
+                        Text("Add more readings to see a trend line.", color = colors.inkMuted)
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            "Average of last ${store.profile.bpMovingAverageReadings} readings",
+                            color = colors.inkMuted,
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 13.sp,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextLink("Change", onClick = onEditBpWindow, contentDescription = "Change blood pressure average window")
                     }
                 }
-                if (trend.size > 1) {
-                    BloodPressureChart(trend, store.bloodPressureReadings, store.profile.bpMovingAverageReadings)
-                } else {
-                    Text("Add more readings to see a trend line.", color = colors.inkMuted)
+                BpTrendView.Category -> {
+                    Text("Where your latest reading falls on the AHA categories.", color = colors.inkMuted, fontSize = 13.sp)
+                    BpGauge(latest.systolic, latest.diastolic)
+                    BloodPressureZoneChart(latest.systolic, latest.diastolic)
                 }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        "Average of last ${store.profile.bpMovingAverageReadings} readings",
-                        color = colors.inkMuted,
-                        fontWeight = FontWeight.Medium,
-                        fontSize = 13.sp,
-                        modifier = Modifier.weight(1f),
-                    )
-                    TextLink("Change", onClick = onEditBpWindow, contentDescription = "Change blood pressure average window")
-                }
-                TextLink("How to measure", onHowToMeasure)
-                TextLink("Share report", onClick = {
-                    shareBloodPressureReport(
-                        context,
-                        buildBloodPressureReport(
-                            store.bloodPressureReadings,
-                            store.profile.bpTargetSystolic,
-                            store.profile.bpTargetDiastolic,
-                            generatedAt = "${formatDate(todayIso())} ${formatTime(nowTime())}",
-                        ),
-                        buildBloodPressureCsv(store.bloodPressureReadings),
-                    )
-                }, contentDescription = "Share blood pressure report")
-                TextLink("Reminders", onEditReminders)
             }
-            SectionTitle("Recent readings")
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ChoiceChip("All", selected = periodFilter == null, onClick = {
-                    periodFilter = null
-                    visibleCount = HISTORY_PAGE
-                })
-                ChoiceChip(BloodPressurePeriod.Morning.label, selected = periodFilter == BloodPressurePeriod.Morning, onClick = {
-                    periodFilter = BloodPressurePeriod.Morning
-                    visibleCount = HISTORY_PAGE
-                })
-                ChoiceChip(BloodPressurePeriod.Evening.label, selected = periodFilter == BloodPressurePeriod.Evening, onClick = {
-                    periodFilter = BloodPressurePeriod.Evening
-                    visibleCount = HISTORY_PAGE
-                })
+        }
+
+        SectionTitle("Goal")
+        if (summary != null) {
+            BloodPressureGoalCard(summary, onEditBpTarget)
+        } else {
+            EmptyState(
+                "No readings in the last 7 days",
+                "Add a reading to see your 7-day average and how often you are at or under target.",
+                "Add reading",
+                onAdd,
+            )
+        }
+
+        SectionTitle("History")
+        FilterBar(activeFilters, onOpen = { filterOpen = true }, onClearAll = clearFilters, openerFocus = filterFocus)
+        if (filtered.isEmpty()) {
+            Text("No readings match these filters.", color = colors.inkMuted)
+        }
+        recent.forEach { reading ->
+            HistoryRow(
+                primary = formatBloodPressure(reading.systolic, reading.diastolic, reading.heartRate),
+                secondary = formatBloodPressureHistoryLine(reading),
+                onClick = { onEdit(reading.id) },
+                trailing = {
+                    BpBadge(
+                        bloodPressureStatus(reading.systolic, reading.diastolic),
+                        compact = true,
+                        systolic = reading.systolic,
+                        diastolic = reading.diastolic,
+                    )
+                },
+                overflowLabel = "Delete",
+                onOverflow = { pending = reading },
+                highlighted = reading.id == highlightedId,
+            )
+        }
+        if (recent.size < filtered.size) {
+            TextLink("Show older", onClick = { visibleCount += HISTORY_PAGE })
+        }
+    }
+    if (filterOpen) {
+        FilterSheet(
+            resultSummary = "Showing ${filtered.size} of ${sorted.size} readings.",
+            onDismiss = { filterOpen = false },
+            onClearAll = clearFilters,
+            returnFocus = filterFocus,
+        ) {
+            FilterSection("Time of day") {
+                ChoiceChip("All", selected = periodFilter == null, onClick = { setPeriod(null) })
+                listOf(BloodPressurePeriod.Morning, BloodPressurePeriod.Evening).forEach { period ->
+                    ChoiceChip(period.label, selected = periodFilter == period, onClick = { setPeriod(period) })
+                }
             }
             if (usedTags.isNotEmpty()) {
-                TagFilterRow(
-                    tags = usedTags,
-                    selected = tagFilters,
-                    onToggle = { tagId ->
-                        tagFilters = if (tagId in tagFilters) tagFilters - tagId else tagFilters + tagId
-                        visibleCount = HISTORY_PAGE
-                    },
-                )
-            }
-            recent.forEach { reading ->
-                HistoryRow(
-                    primary = formatBloodPressure(reading.systolic, reading.diastolic, reading.heartRate),
-                    secondary = formatBloodPressureHistoryLine(reading),
-                    onClick = { onEdit(reading.id) },
-                    trailing = {
-                        BpBadge(
-                            bloodPressureStatus(reading.systolic, reading.diastolic),
-                            compact = true,
-                            systolic = reading.systolic,
-                            diastolic = reading.diastolic,
-                        )
-                    },
-                    overflowLabel = "Delete",
-                    onOverflow = { pending = reading },
-                )
-            }
-            if (recent.size < filtered.size) {
-                TextLink("Show older", onClick = { visibleCount += HISTORY_PAGE })
+                FilterSection("Tags") {
+                    usedTags.forEach { tag ->
+                        ChoiceChip(tag.label, selected = tag.id in tagFilters, onClick = { toggleTag(tag.id) })
+                    }
+                }
             }
         }
     }
@@ -261,54 +303,53 @@ fun BloodPressureScreen(
 }
 
 @Composable
-private fun VisitSummaryCard(summary: BloodPressureVisitSummary, onEditBpTarget: () -> Unit) {
+private fun BloodPressureGoalCard(summary: BloodPressureVisitSummary, onEditBpTarget: () -> Unit) {
     val colors = LocalAppColors.current
     SurfaceCard {
+        Text("7-DAY AVERAGE", color = colors.inkMuted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.1.sp)
         Text(
             formatBloodPressure(summary.meanSystolic, summary.meanDiastolic, summary.meanHeartRate),
             color = colors.ink,
             fontSize = 22.sp,
             fontWeight = FontWeight.ExtraBold,
         )
-        Text("7-day average is ${summary.status.label}", color = colors.ink, fontWeight = FontWeight.SemiBold)
         BpBadge(summary.status, systolic = summary.meanSystolic, diastolic = summary.meanDiastolic)
         Text(
-            "From ${summary.count} ${if (summary.count == 1) "reading" else "readings"} in the last 7 days.",
+            "From ${summary.count} ${if (summary.count == 1) "reading" else "readings"} in the last 7 days. AHA categories here use the average, not one reading.",
             color = colors.inkMuted,
             fontSize = 13.sp,
+            lineHeight = 18.sp,
         )
         val morning = summary.morning
         val evening = summary.evening
         if (morning != null && evening != null) {
+            HorizontalDivider(color = colors.border)
             Text(
                 "Morning ${morning.systolic} / ${morning.diastolic} · Evening ${evening.systolic} / ${evening.diastolic}",
-                color = colors.inkMuted,
-                fontSize = 13.sp,
+                color = colors.ink,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
             )
         }
+        HorizontalDivider(color = colors.border)
         val target = summary.target
         if (target != null) {
             val goal = formatBloodPressureTarget(target.targetSystolic, target.targetDiastolic)
             Text(
                 "${target.last7Met} of ${target.last7Total} in the last 7 days at or under $goal.",
                 color = colors.ink,
-                fontSize = 13.sp,
+                fontSize = 14.sp,
             )
             Text(
                 "${target.last30Met} of ${target.last30Total} in the last 30 days at or under $goal.",
                 color = colors.inkMuted,
                 fontSize = 13.sp,
             )
-            TextLink("Change target", onClick = onEditBpTarget)
+            TextLink("Change target", onClick = onEditBpTarget, contentDescription = "Change blood pressure target")
         } else {
+            Text("Set the target your clinician gave you to track how often you meet it.", color = colors.inkMuted, fontSize = 13.sp)
             TextLink("Set a target", onClick = onEditBpTarget, contentDescription = "Set blood pressure target")
         }
-        Text(
-            "AHA categories on this card use the average, not one reading.",
-            color = colors.inkMuted,
-            fontSize = 12.sp,
-            lineHeight = 16.sp,
-        )
     }
 }
 
@@ -320,7 +361,8 @@ fun BloodPressureFormScreen(
     onBack: () -> Unit,
     onHowToMeasure: () -> Unit,
     onSave: (BloodPressureSave) -> Unit,
-    onFinished: () -> Unit,
+    onFinished: (BpStatus) -> Unit,
+    onDelete: (() -> Unit)? = null,
 ) {
     if (missing) {
         AppScreen(title = "Reading not found", lead = "That reading may have been deleted.", onBack = onBack, backLabel = "Blood pressure") {}
@@ -337,13 +379,13 @@ fun BloodPressureFormScreen(
     }
     var periodLocked by remember(existing?.id) { mutableStateOf(existing?.period != null) }
     var systolic by remember(existing?.id) {
-        mutableStateOf((firstSample?.systolic ?: existing?.systolic ?: suggestion?.systolic)?.toString().orEmpty())
+        mutableStateOf((firstSample?.systolic ?: existing?.systolic)?.toString().orEmpty())
     }
     var diastolic by remember(existing?.id) {
-        mutableStateOf((firstSample?.diastolic ?: existing?.diastolic ?: suggestion?.diastolic)?.toString().orEmpty())
+        mutableStateOf((firstSample?.diastolic ?: existing?.diastolic)?.toString().orEmpty())
     }
     var heartRate by remember(existing?.id) {
-        mutableStateOf((firstSample?.heartRate ?: existing?.heartRate ?: suggestion?.heartRate)?.toString().orEmpty())
+        mutableStateOf((firstSample?.heartRate ?: existing?.heartRate)?.toString().orEmpty())
     }
     var pairEnabled by remember(existing?.id) { mutableStateOf(secondSample != null) }
     var systolic2 by remember(existing?.id) { mutableStateOf(secondSample?.systolic?.toString().orEmpty()) }
@@ -357,9 +399,15 @@ fun BloodPressureFormScreen(
     var errors by remember { mutableStateOf(mapOf<String, String>()) }
     var pending by remember { mutableStateOf<BloodPressureSave?>(null) }
     var confirmWarning by remember { mutableStateOf<String?>(null) }
-    var savedStatus by remember { mutableStateOf<BpStatus?>(null) }
+    var detailsOpen by remember(existing?.id) {
+        mutableStateOf(existing?.tags?.isNotEmpty() == true || existing?.note?.isNotBlank() == true)
+    }
     val isEdit = existing != null
-    val preview = savedStatus
+    val fields = listOf(
+        date, time, period.id, systolic, diastolic, heartRate, pairEnabled.toString(),
+        systolic2, diastolic2, heartRate2, selectedTags.sorted().joinToString(","), note,
+    )
+    val initialFields = remember(existing?.id) { fields }
     LaunchedEffect(pairEnabled, existing?.id) {
         if (!pairEnabled || secondSample != null) return@LaunchedEffect
         waitSeconds = 60
@@ -368,48 +416,53 @@ fun BloodPressureFormScreen(
             waitSeconds -= 1
         }
     }
-    if (preview != null && pending != null) {
-        val saved = pending!!
-        BackHandler { onFinished() }
-        LaunchedEffect(preview) {
-            delay(1_400)
-            onFinished()
+    val submit: () -> Unit = {
+        val draft = buildBloodPressureSave(
+            date = date,
+            time = time,
+            period = period,
+            systolic = systolic,
+            diastolic = diastolic,
+            heartRate = heartRate,
+            pairEnabled = pairEnabled,
+            systolic2 = systolic2,
+            diastolic2 = diastolic2,
+            heartRate2 = heartRate2,
+            existingPairId = existing?.pairId,
+            tags = selectedTags,
+            note = note,
+        )
+        errors = draft.second
+        val next = draft.first
+        if (next != null) {
+            pending = next
+            val warning = bloodPressureSaveWarning(next.systolic, next.diastolic)
+            if (warning != null) confirmWarning = warning
+            else commitReading(next, onSave, onFinished)
         }
-        AppScreen(
-            eyebrow = "Blood pressure",
-            title = "Saved",
-            lead = "This reading is ${preview.label}.",
-        ) {
-            SurfaceCard {
-                Text(
-                    formatBloodPressure(saved.systolic, saved.diastolic, saved.heartRate),
-                    color = LocalAppColors.current.ink,
-                    fontSize = 28.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                )
-                Text(formatDerivedBloodPressure(saved.systolic, saved.diastolic), color = LocalAppColors.current.inkMuted)
-                if (saved.averagedFrom.size >= 2) {
-                    Text("Average of two readings.", color = LocalAppColors.current.inkMuted, fontSize = 13.sp)
-                }
-                BpBadge(preview, systolic = saved.systolic, diastolic = saved.diastolic)
-                LowBpHint(saved.systolic, saved.diastolic)
-            }
-        }
-        return
     }
-    AppScreen(
-        eyebrow = "Blood pressure / ${if (isEdit) "Edit" else "New"}",
+    RecordFormScaffold(
         title = if (isEdit) "Edit reading" else "Add reading",
         lead = if (isEdit) {
             "Update the date, time, and pressure. Heart rate is optional."
         } else {
             "Date and time default to now. Enter systolic over diastolic. Heart rate is optional."
         },
-        onBack = onBack,
-        backLabel = "Blood pressure",
+        isDirty = fields != initialFields,
+        onClose = onBack,
+        onSave = submit,
+        actions = listOf(MenuAction("How to measure") { onHowToMeasure() }),
+        delete = if (existing != null && onDelete != null) {
+            FormDelete(
+                title = "Delete this reading?",
+                body = "Delete the ${formatDate(existing.date)} ${formatTime(existing.time)} reading of ${formatBloodPressureCompact(existing.systolic, existing.diastolic, existing.heartRate)}?",
+                onConfirm = onDelete,
+            )
+        } else {
+            null
+        },
     ) {
         SurfaceCard {
-            TextLink("How to measure", onHowToMeasure)
             DateTimeFields(
                 date,
                 time,
@@ -430,15 +483,18 @@ fun BloodPressureFormScreen(
                     })
                 }
             }
+            Text(if (pairEnabled) "First reading" else "Reading", color = LocalAppColors.current.ink, fontWeight = FontWeight.SemiBold)
             if (suggestion != null) {
-                Text(
+                LastTimeSuggestion(
                     formatPreviousBloodPressure(suggestion.systolic, suggestion.diastolic, suggestion.heartRate),
-                    color = LocalAppColors.current.inkMuted,
-                    fontWeight = FontWeight.Medium,
-                    fontSize = 13.sp,
+                    onUse = {
+                        systolic = suggestion.systolic.toString()
+                        diastolic = suggestion.diastolic.toString()
+                        heartRate = suggestion.heartRate?.toString().orEmpty()
+                    },
+                    useDescription = "Use last reading's values",
                 )
             }
-            Text(if (pairEnabled) "First reading" else "Reading", color = LocalAppColors.current.ink, fontWeight = FontWeight.SemiBold)
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 LabeledField("Systolic", systolic, { systolic = it.filter(Char::isDigit) }, Modifier.weight(1f), errors["systolic"], keyboardType = KeyboardType.Number)
                 LabeledField("Diastolic", diastolic, { diastolic = it.filter(Char::isDigit) }, Modifier.weight(1f), errors["diastolic"], keyboardType = KeyboardType.Number)
@@ -482,58 +538,37 @@ fun BloodPressureFormScreen(
             if (liveSys != null && liveDia != null) {
                 LowBpHint(liveSys, liveDia)
             }
-            Text("Tags", color = LocalAppColors.current.inkMuted, fontWeight = FontWeight.Medium, fontSize = 13.sp)
-            TagChipRow(
-                selected = selectedTags,
-                onToggle = { tagId ->
-                    selectedTags = if (tagId in selectedTags) selectedTags - tagId else selectedTags + tagId
-                },
-            )
-            LabeledField(
-                "Note",
-                note,
-                { note = it.take(160) },
-                hint = "Optional one-line note",
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                GhostButton("Cancel", onBack, Modifier.weight(1f))
-                PrimaryButton(if (isEdit) "Save changes" else "Save reading", modifier = Modifier.weight(1f), onClick = {
-                    val draft = buildBloodPressureSave(
-                        date = date,
-                        time = time,
-                        period = period,
-                        systolic = systolic,
-                        diastolic = diastolic,
-                        heartRate = heartRate,
-                        pairEnabled = pairEnabled,
-                        systolic2 = systolic2,
-                        diastolic2 = diastolic2,
-                        heartRate2 = heartRate2,
-                        existingPairId = existing?.pairId,
-                        tags = selectedTags,
-                        note = note,
-                    )
-                    errors = draft.second
-                    val next = draft.first
-                    if (next != null) {
-                        pending = next
-                        val warning = bloodPressureSaveWarning(next.systolic, next.diastolic)
-                        if (warning != null) confirmWarning = warning
-                        else commitReading(next, onSave) { savedStatus = it }
-                    }
-                })
+            AddDetails(
+                expanded = detailsOpen,
+                onToggle = { detailsOpen = !detailsOpen },
+                label = if (selectedTags.isEmpty() && note.isBlank()) "Add details" else "Details",
+            ) {
+                Text("Tags", color = LocalAppColors.current.inkMuted, fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                TagChipRow(
+                    selected = selectedTags,
+                    onToggle = { tagId ->
+                        selectedTags = if (tagId in selectedTags) selectedTags - tagId else selectedTags + tagId
+                    },
+                )
+                LabeledField(
+                    "Note",
+                    note,
+                    { note = it.take(160) },
+                    hint = "Optional one-line note",
+                )
             }
         }
     }
     confirmWarning?.let { warning ->
-        ConfirmDeleteDialog(
+        ConfirmDialog(
             title = "Check this reading",
             body = warning,
-            confirmLabel = if (isEdit) "Save changes" else "Save reading",
+            confirmLabel = "Save anyway",
+            dismissLabel = "Edit",
             onConfirm = {
                 confirmWarning = null
                 pending?.let { saved ->
-                    commitReading(saved, onSave) { status -> savedStatus = status }
+                    commitReading(saved, onSave, onFinished)
                 }
             },
             onDismiss = {
@@ -625,20 +660,6 @@ private fun TagChipRow(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun TagFilterRow(
-    tags: List<BloodPressureTag>,
-    selected: Set<String>,
-    onToggle: (String) -> Unit,
-) {
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        tags.forEach { tag ->
-            ChoiceChip(tag.label, selected = tag.id in selected, onClick = { onToggle(tag.id) })
-        }
-    }
-}
-
 private fun commitReading(
     saved: BloodPressureSave,
     onSave: (BloodPressureSave) -> Unit,
@@ -646,4 +667,36 @@ private fun commitReading(
 ) {
     onSave(saved)
     onStatus(bloodPressureStatus(saved.systolic, saved.diastolic))
+}
+
+/** Hero content for the hub card; the Home card reuses it so both read the same. */
+@Composable
+fun BloodPressureHero(latest: BloodPressureReading, readings: List<BloodPressureReading>) {
+    val colors = LocalAppColors.current
+    val status = bloodPressureStatus(latest.systolic, latest.diastolic)
+    val delta = bloodPressureDelta(readings)
+    HeroHeader("Latest reading", formatBloodPressure(latest.systolic, latest.diastolic, latest.heartRate), valueSize = 28.sp)
+    BpBadge(status, systolic = latest.systolic, diastolic = latest.diastolic)
+    if (delta != null) {
+        Text(
+            formatBloodPressureDelta(delta),
+            color = when {
+                delta.systolic == 0 && delta.diastolic == 0 -> colors.inkMuted
+                delta.systolic <= 0 && delta.diastolic <= 0 -> colors.successText
+                else -> colors.accentText
+            },
+            fontWeight = FontWeight.Medium,
+        )
+    }
+    Text(formatDerivedBloodPressure(latest.systolic, latest.diastolic), color = colors.inkMuted, fontSize = 13.sp)
+    Text("${formatDate(latest.date)} · ${formatTime(latest.time)} · ${bloodPressurePeriod(latest).label}", color = colors.inkMuted)
+    LowBpHint(latest.systolic, latest.diastolic)
+    if (status == BpStatus.Severe) {
+        Text(
+            "Wait 1 minute and take it again. Call your health care professional if it stays this high. Call 911 if you have chest pain, shortness of breath, back pain, numbness, weakness, vision changes, or trouble speaking.",
+            color = colors.danger,
+            fontWeight = FontWeight.Medium,
+            fontSize = 13.sp,
+        )
+    }
 }

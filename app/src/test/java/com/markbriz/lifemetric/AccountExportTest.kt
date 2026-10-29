@@ -593,6 +593,76 @@ class AccountExportTest {
         assertThrowsMessage("plan that is not in the file") { parseAccountExport(broken) }
     }
 
+    @Test
+    fun attachesMissingActivityToItsPlanOnImport() {
+        val raw = """
+            {
+              "format": "life-metric-account",
+              "version": 1,
+              "exportedAt": "2026-10-12T12:00:00.000Z",
+              "themeId": "mint",
+              "data": {
+                "plans": [{"id":"plan-1","name":"Upper","activityTypeId":"strength_training","category":"strength","machines":[{"id":"machine-1","name":"Bench"}]}],
+                "workouts": [{"id":"workout-1","date":"2026-10-01","planId":"plan-1","activityTypeId":"strength_training","entries":[{"id":"entry-1","planId":"plan-1","machineId":"ghost-1","schema":"load","weight":100,"repetitions":8}]}],
+                "weightRecords": [],
+                "bloodPressureReadings": [],
+                "profile": {"firstName":"Ada","lastName":"Lovelace"}
+              }
+            }
+        """.trimIndent()
+        val parsed = parseAccountExport(raw)
+        val plan = parsed.data.plans.single()
+        assertTrue(plan.machines.any { it.id == "ghost-1" && it.name == "Unknown activity" })
+        assertEquals("ghost-1", parsed.data.workouts.single().entries.single().machineId)
+    }
+
+    @Test
+    fun copiesActivityFromAnotherPlanWhenWorkoutPointsElsewhere() {
+        val raw = """
+            {
+              "format": "life-metric-account",
+              "version": 1,
+              "exportedAt": "2026-10-12T12:00:00.000Z",
+              "themeId": "mint",
+              "data": {
+                "plans": [
+                  {"id":"plan-1","name":"Upper","activityTypeId":"strength_training","category":"strength","machines":[{"id":"machine-1","name":"Bench"}]},
+                  {"id":"plan-2","name":"Lower","activityTypeId":"strength_training","category":"strength","machines":[]}
+                ],
+                "workouts": [{"id":"workout-1","date":"2026-10-01","planId":"plan-2","activityTypeId":"strength_training","entries":[{"id":"entry-1","planId":"plan-1","machineId":"machine-1","schema":"load","weight":100,"repetitions":8}]}],
+                "weightRecords": [],
+                "bloodPressureReadings": [],
+                "profile": {"firstName":"Ada","lastName":"Lovelace"}
+              }
+            }
+        """.trimIndent()
+        val parsed = parseAccountExport(raw)
+        val lower = parsed.data.plans.first { it.id == "plan-2" }
+        val copied = lower.machines.single { it.name == "Bench" }
+        assertEquals("machine-1-2", copied.id)
+        assertEquals("machine-1-2", parsed.data.workouts.single().entries.single().machineId)
+        assertEquals("plan-2", parsed.data.workouts.single().entries.single().planId)
+    }
+
+    @Test
+    fun exportWritesRecoveredActivitiesSoTheFileLoadsAgain() {
+        val store = sample.copy(
+            plans = listOf(
+                FitnessPlan(
+                    id = "plan-1",
+                    name = "Upper",
+                    activityTypeId = "strength_training",
+                    category = "strength",
+                    machines = emptyList(),
+                ),
+            ),
+        )
+        val parsed = parseAccountExport(buildAccountExport(store, "mint", "2026-10-12T12:00:00.000Z"))
+        assertEquals("machine-1", parsed.data.plans.single().machines.single().id)
+        assertEquals("Unknown activity", parsed.data.plans.single().machines.single().name)
+        assertEquals("machine-1", parsed.data.workouts.single().entries.single().machineId)
+    }
+
     private fun assertThrowsMessage(fragment: String, block: () -> Unit) {
         try {
             block()

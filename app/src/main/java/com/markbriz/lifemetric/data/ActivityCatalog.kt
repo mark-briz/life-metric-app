@@ -158,8 +158,6 @@ object ActivityCatalog {
         return label(id)
     }
 
-    fun segmentFieldLabel(schema: String): String = if (schema == "distance_time") "Segment" else "Activity"
-
     /**
      * Extra entry fields for this activity. Cycling uses speed, cadence, and heart rate;
      * add the same [EntryMetric]s to other type ids when those workouts need them.
@@ -180,7 +178,7 @@ object ActivityCatalog {
         "distance_time" -> "Add segment"
         "interval" -> "Add block"
         "note" -> "Add note"
-        else -> "Add block"
+        else -> "Add time"
     }
 
     fun editEntryLabel(schema: String): String = when (schema) {
@@ -188,7 +186,7 @@ object ActivityCatalog {
         "distance_time" -> "Edit segment"
         "interval" -> "Edit block"
         "note" -> "Edit note"
-        else -> "Edit block"
+        else -> "Edit time"
     }
 
     fun entryNoun(schema: String, count: Int): String = when (schema) {
@@ -196,7 +194,7 @@ object ActivityCatalog {
         "distance_time" -> if (count == 1) "segment" else "segments"
         "interval" -> if (count == 1) "block" else "blocks"
         "note" -> if (count == 1) "note" else "notes"
-        else -> if (count == 1) "block" else "blocks"
+        else -> if (count == 1) "time entry" else "time entries"
     }
 
     fun intervalDefaults(typeId: String): Triple<Int, Int?, Int?> =

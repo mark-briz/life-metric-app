@@ -6,6 +6,9 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
 
 @Immutable
 data class AppColors(
@@ -31,7 +34,44 @@ data class AppColors(
     val gradientTop: Color,
     val gradientMid: Color,
     val gradientBottom: Color,
-)
+) {
+    /** Button and FAB fill, paired with [onBrandFill] text at 4.5:1 or better. */
+    val brandFill: Color = if (lightStatusBar) brandDark else brand
+    val onBrandFill: Color = if (lightStatusBar) Color.White else Color(0xFF042F2E)
+    /** Text versions of the accent and success hues; the raw hues stay for charts and icons. */
+    val accentText: Color = accent.readableOn(surface)
+    val successText: Color = success.readableOn(surface)
+    /** Selected chip and segment text on [brandSoft]. */
+    val selectedText: Color = brandDark.readableOn(brandSoft)
+    /** Snackbar action text on the [ink] snackbar container. */
+    val snackbarAction: Color = brand.readableOn(ink)
+
+    /** Text in [hue] on a pill tinted with the same hue over [surface], as status badges draw it. */
+    fun statusText(hue: Color): Color = hue.readableOn(hue.copy(alpha = STATUS_TINT_ALPHA).compositeOver(surface))
+
+    /** Text in a category [hue] directly on [surface]. */
+    fun hueText(hue: Color): Color = hue.readableOn(surface)
+}
+
+const val STATUS_TINT_ALPHA = 0.14f
+
+/** WCAG 2.x contrast ratio between [fg] (composited over [bg]) and [bg]. */
+fun contrastRatio(fg: Color, bg: Color): Double {
+    val a = fg.compositeOver(bg).luminance() + 0.05
+    val b = bg.luminance() + 0.05
+    return maxOf(a, b) / minOf(a, b)
+}
+
+/** This color, moved toward black or white just far enough to reach [minRatio] on [background]. */
+fun Color.readableOn(background: Color, minRatio: Double = 4.5): Color {
+    if (contrastRatio(this, background) >= minRatio) return this
+    val target = if (background.luminance() > 0.4f) Color.Black else Color.White
+    for (step in 1..20) {
+        val candidate = lerp(this, target, step / 20f)
+        if (contrastRatio(candidate, background) >= minRatio) return candidate
+    }
+    return target
+}
 
 private fun theme(
     id: String,
@@ -68,7 +108,7 @@ val MintTheme = theme(
     "mint", "Mint", "Teal and coral on soft mint gradients.",
     listOf(0xFFD1FAE5, 0xFFFEF3C7, 0xFFFFEDD5), true,
     0xFF0D9488, 0xFF0F766E, 0xFFCCFBF1, 0xFFF97316, 0xFFFFEDD5,
-    0xFF0F172A, 0xFF64748B, 0xFF94A3B8, 0xFFFFFFFF, 0xFFF8FAFC, 0xFFE2E8F0,
+    0xFF0F172A, 0xFF475569, 0xFF64748B, 0xFFFFFFFF, 0xFFF8FAFC, 0xFFE2E8F0,
     0xFFDC2626, 0xFF059669, 0x730F172A, 0xFFD1FAE5, 0xFFFEF3C7, 0xFFFFEDD5,
 )
 
@@ -76,7 +116,7 @@ val OceanTheme = theme(
     "ocean", "Ocean", "Cool sky blues with deep slate text.",
     listOf(0xFFE0F2FE, 0xFFDBEAFE, 0xFFE0E7FF), true,
     0xFF0284C7, 0xFF0369A1, 0xFFE0F2FE, 0xFF6366F1, 0xFFE0E7FF,
-    0xFF0F172A, 0xFF475569, 0xFF94A3B8, 0xFFFFFFFF, 0xFFF8FAFC, 0xFFCBD5E1,
+    0xFF0F172A, 0xFF475569, 0xFF64748B, 0xFFFFFFFF, 0xFFF8FAFC, 0xFFCBD5E1,
     0xFFDC2626, 0xFF059669, 0x730F172A, 0xFFE0F2FE, 0xFFDBEAFE, 0xFFE0E7FF,
 )
 
@@ -92,7 +132,7 @@ val DarkTheme = theme(
     "dark", "Dark", "Midnight surfaces with bright teal accents.",
     listOf(0xFF0F172A, 0xFF1E293B, 0xFF134E4A), false,
     0xFF2DD4BF, 0xFF14B8A6, 0xFF134E4A, 0xFFFB923C, 0xFF431407,
-    0xFFF8FAFC, 0xFF94A3B8, 0xFF64748B, 0xFF1E293B, 0xFF0F172A, 0xFF334155,
+    0xFFF8FAFC, 0xFFCBD5E1, 0xFF94A3B8, 0xFF1E293B, 0xFF0F172A, 0xFF334155,
     0xFFF87171, 0xFF34D399, 0x8C000000, 0xFF0F172A, 0xFF1E293B, 0xFF134E4A,
 )
 

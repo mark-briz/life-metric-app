@@ -15,6 +15,7 @@ import com.markbriz.lifemetric.data.newId
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.markbriz.lifemetric.domain.BloodPressureSave
+import com.markbriz.lifemetric.domain.BpStatus
 import com.markbriz.lifemetric.domain.clampBpWindow
 import com.markbriz.lifemetric.domain.lastUsedPlanId
 import com.markbriz.lifemetric.domain.nowTime
@@ -37,7 +38,12 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
-data class UndoToast(val message: String, val token: Long = System.nanoTime())
+/** [bpStatus] adds a Details action that opens the blood pressure categories for that status. */
+data class UndoToast(
+    val message: String,
+    val token: Long = System.nanoTime(),
+    val bpStatus: BpStatus? = null,
+)
 
 data class AppUiState(
     val booting: Boolean = true,
@@ -50,12 +56,16 @@ data class AppUiState(
     val draftWorkout: Workout? = null,
     val undo: UndoToast? = null,
     val notice: UndoToast? = null,
+    /** Hub history row to flash after a save; cleared after a short delay. */
+    val highlightedId: String? = null,
 )
 
 private sealed class DeletedRecord {
     data class BloodPressure(val reading: BloodPressureReading) : DeletedRecord()
     data class Weight(val record: WeightRecord, val clearedStart: Boolean) : DeletedRecord()
     data class Session(val workout: Workout) : DeletedRecord()
+    data class Entry(val workoutId: String, val entry: WorkoutEntry, val index: Int) : DeletedRecord()
+    data class Activity(val planId: String, val machine: Machine, val index: Int) : DeletedRecord()
 }
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
@@ -210,7 +220,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun savePlan(planId: String?, name: String, description: String, activityTypeId: String): String? {
+    /** [newPlanId] lets a caller that creates a plan select it right away. */
+    fun savePlan(
+        planId: String?,
+        name: String,
+        description: String,
+        activityTypeId: String,
+        newPlanId: String = newId("plan"),
+    ): String? {
         val trimmed = name.trim()
         if (trimmed.isEmpty()) return "Name is required."
         val type = ActivityCatalog.get(activityTypeId)
@@ -218,7 +235,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val plans = store.plans.toMutableList()
             if (planId == null) {
                 plans += FitnessPlan(
-                    id = newId("plan"),
+                    id = newPlanId,
                     name = trimmed,
                     description = description.trim(),
                     activityTypeId = type.id,
@@ -263,6 +280,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun deleteActivity(planId: String, machineId: String) {
+        val plan = _state.value.store.plans.find { it.id == planId } ?: return
+        val index = plan.machines.indexOfFirst { it.id == machineId }
+        if (index < 0) return
+        offerUndo(DeletedRecord.Activity(planId, plan.machines[index], index), "Activity removed")
         mutate { store ->
             store.copy(
                 plans = store.plans.map { plan ->
@@ -272,11 +293,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Starts an in-memory session. Returns its id, or null if no plan exists. */
-    fun startWorkout(): String? {
+    /** Starts an in-memory session on [planId] (default: last used). Returns its id, or null if no plan exists. */
+    fun startWorkout(planId: String? = null): String? {
         val store = _state.value.store
-        val planId = lastUsedPlanId(store.workouts, store.plans) ?: return null
-        val plan = store.plans.find { it.id == planId } ?: return null
+        val id = planId?.takeIf { requested -> store.plans.any { it.id == requested } }
+            ?: lastUsedPlanId(store.workouts, store.plans)
+            ?: return null
+        val plan = store.plans.find { it.id == id } ?: return null
         val workout = Workout(
             id = newId("workout"),
             date = todayIso(),
@@ -295,21 +318,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (draft.entries.isEmpty()) _state.update { it.copy(draftWorkout = null) }
     }
 
-    fun updateWorkoutDate(workoutId: String, date: String) {
-        if (updateDraft(workoutId) { it.copy(date = date) }) return
-        replaceWorkout(workoutId) { it.copy(date = date) }
-    }
-
-    fun updateWorkoutDuration(workoutId: String, durationSec: Int?) {
-        val normalized = durationSec?.takeIf { it > 0 }
-        if (updateDraft(workoutId) { it.copy(durationSec = normalized) }) return
-        replaceWorkout(workoutId) { it.copy(durationSec = normalized) }
-    }
-
-    fun updateWorkoutNote(workoutId: String, note: String) {
-        val trimmed = note.trim()
-        if (updateDraft(workoutId) { it.copy(note = trimmed) }) return
-        replaceWorkout(workoutId) { it.copy(note = trimmed) }
+    /** Saves date, duration, and note together from the session details sheet. */
+    fun updateWorkoutDetails(workoutId: String, date: String, durationSec: Int?, note: String) {
+        val apply = { workout: Workout ->
+            workout.copy(
+                date = date.ifBlank { workout.date },
+                durationSec = durationSec?.takeIf { it > 0 },
+                note = note.trim(),
+            )
+        }
+        if (updateDraft(workoutId, apply)) return
+        replaceWorkout(workoutId, apply)
     }
 
     fun updateWorkoutEntryRest(workoutId: String, entryId: String, restSecTaken: Int?) {
@@ -361,8 +380,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 workout.copy(entries = workout.entries.filterNot { it.id == entryId })
             }
         ) return
-        replaceWorkout(workoutId) { workout ->
-            workout.copy(entries = workout.entries.filterNot { it.id == entryId })
+        val workout = _state.value.store.workouts.find { it.id == workoutId } ?: return
+        val index = workout.entries.indexOfFirst { it.id == entryId }
+        if (index < 0) return
+        val entry = workout.entries[index]
+        val noun = ActivityCatalog.entryNoun(entry.schema, 1).replaceFirstChar { it.uppercase() }
+        offerUndo(DeletedRecord.Entry(workoutId, entry, index), "$noun deleted")
+        replaceWorkout(workoutId) { current ->
+            current.copy(entries = current.entries.filterNot { it.id == entryId })
         }
     }
 
@@ -381,10 +406,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun saveBloodPressure(readingId: String?, draft: BloodPressureSave) {
+        val id = readingId ?: newId("bp")
         mutate { store ->
             val readings = store.bloodPressureReadings.toMutableList()
             val reading = BloodPressureReading(
-                id = readingId ?: newId("bp"),
+                id = id,
                 date = draft.date,
                 time = draft.time.ifBlank { nowTime() },
                 systolic = draft.systolic,
@@ -400,6 +426,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             if (index >= 0) readings[index] = reading else readings += reading
             store.copy(bloodPressureReadings = readings)
         }
+        highlightRecord(id)
     }
 
     fun deleteBloodPressure(id: String) {
@@ -425,6 +452,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         return null
     }
 
+    /** Validates height and waist together and saves both only when both are valid. */
+    fun saveBodyMeasures(feet: String, inches: String, waistText: String): String? {
+        val profile = _state.value.store.profile
+        val height = validateProfile(feet, inches, "", profile.bpMovingAverageReadings)
+        val heightError = height.heightFeetError ?: height.heightInchesError
+        if (heightError != null) return heightError
+        val waist = validateWaistInches(waistText)
+        if (waist.second != null) return waist.second
+        mutate { store ->
+            store.copy(profile = store.profile.copy(heightInches = height.heightInches, waistInches = waist.first))
+        }
+        return null
+    }
+
     fun saveWeight(
         recordId: String?,
         date: String,
@@ -433,10 +474,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         tags: List<String> = emptyList(),
         note: String = "",
     ) {
+        val id = recordId ?: newId("bw")
         mutate { store ->
             val records = store.weightRecords.toMutableList()
             val record = WeightRecord(
-                id = recordId ?: newId("bw"),
+                id = id,
                 date = date,
                 time = time.ifBlank { nowTime() },
                 weight = roundToTenth(weight),
@@ -447,6 +489,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             if (index >= 0) records[index] = record else records += record
             store.copy(weightRecords = records)
         }
+        highlightRecord(id)
     }
 
     fun deleteWeight(id: String) {
@@ -491,6 +534,28 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             is DeletedRecord.Session -> replaceWorkouts { workouts ->
                 if (workouts.any { it.id == item.workout.id }) workouts else workouts + item.workout
             }
+            is DeletedRecord.Entry -> replaceWorkout(item.workoutId) { workout ->
+                if (workout.entries.any { it.id == item.entry.id }) {
+                    workout
+                } else {
+                    val entries = workout.entries.toMutableList()
+                    entries.add(item.index.coerceIn(0, entries.size), item.entry)
+                    workout.copy(entries = entries)
+                }
+            }
+            is DeletedRecord.Activity -> mutate { store ->
+                store.copy(
+                    plans = store.plans.map { plan ->
+                        if (plan.id != item.planId || plan.machines.any { it.id == item.machine.id }) {
+                            plan
+                        } else {
+                            val machines = plan.machines.toMutableList()
+                            machines.add(item.index.coerceIn(0, machines.size), item.machine)
+                            plan.copy(machines = machines)
+                        }
+                    },
+                )
+            }
         }
     }
 
@@ -500,9 +565,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(undo = null) }
     }
 
+    fun highlightRecord(id: String) {
+        _state.update { it.copy(highlightedId = id) }
+        viewModelScope.launch {
+            delay(2_400)
+            _state.update { if (it.highlightedId == id) it.copy(highlightedId = null) else it }
+        }
+    }
+
     fun showSaved() {
         if (_state.value.undo != null) return
         _state.update { it.copy(notice = UndoToast("Saved")) }
+    }
+
+    fun showBloodPressureSaved(status: BpStatus) {
+        if (_state.value.undo != null) return
+        _state.update { it.copy(notice = UndoToast("Saved · ${status.label}", bpStatus = status)) }
     }
 
     fun dismissNotice(token: Long? = null) {

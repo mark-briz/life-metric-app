@@ -28,20 +28,20 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -50,9 +50,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -78,6 +81,9 @@ import com.markbriz.lifemetric.domain.bloodPressureStatus
 import com.markbriz.lifemetric.domain.isolatedBloodPressureNote
 import com.markbriz.lifemetric.domain.bmiCategory
 import com.markbriz.lifemetric.domain.chronologicalBp
+import com.markbriz.lifemetric.domain.describeBloodPressureChart
+import com.markbriz.lifemetric.domain.describeWeekBars
+import com.markbriz.lifemetric.domain.describeWeightChart
 import com.markbriz.lifemetric.domain.DailyWeight
 import com.markbriz.lifemetric.domain.WeightChartModel
 import com.markbriz.lifemetric.domain.displayWeight
@@ -86,7 +92,7 @@ import com.markbriz.lifemetric.domain.formatBmiCaption
 import com.markbriz.lifemetric.domain.shortDateLabel
 import com.markbriz.lifemetric.domain.trailingMovingAverage
 import com.markbriz.lifemetric.ui.theme.LocalAppColors
-import kotlinx.coroutines.delay
+import com.markbriz.lifemetric.ui.theme.STATUS_TINT_ALPHA
 import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.floor
@@ -109,81 +115,137 @@ fun GradientBackground(modifier: Modifier = Modifier, content: @Composable () ->
     }
 }
 
+data class MenuAction(val label: String, val destructive: Boolean = false, val onClick: () -> Unit)
+
+enum class NavIcon { Back, Close }
+
+/**
+ * Shared screen frame: a pinned top bar (back or close, title, optional bar action, overflow),
+ * scrolling content, an optional extended FAB, and an optional pinned bottom bar.
+ */
 @Composable
 fun AppScreen(
     title: String,
-    eyebrow: String? = null,
     lead: String? = null,
     onBack: (() -> Unit)? = null,
     backLabel: String = "Back",
+    navIcon: NavIcon = NavIcon.Back,
     showFab: Boolean = false,
     fabLabel: String = "Add",
     onFab: (() -> Unit)? = null,
+    actions: List<MenuAction> = emptyList(),
+    barAction: (@Composable () -> Unit)? = null,
+    bottomBar: (@Composable () -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val colors = LocalAppColors.current
-    Box(Modifier.fillMaxSize()) {
-        Column(
+    val scroll = rememberScrollState()
+    val scrolled = scroll.value > 0
+    Column(Modifier.fillMaxSize()) {
+        Row(
             Modifier
-                .fillMaxSize()
-                .imePadding()
-                .verticalScroll(rememberScrollState())
-                .padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = if (showFab) 88.dp else 28.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+                .fillMaxWidth()
+                .background(if (scrolled) colors.surface else Color.Transparent)
+                .height(64.dp)
+                .padding(start = if (onBack == null) 20.dp else 4.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             if (onBack != null) {
-                Row(
-                    Modifier
-                        .defaultMinSize(minHeight = 48.dp)
-                        .clickable(onClick = onBack)
-                        .semantics { contentDescription = "Back to $backLabel" },
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, tint = colors.brandDark)
-                    Spacer(Modifier.width(6.dp))
-                    Text(backLabel, color = colors.brandDark, fontWeight = FontWeight.SemiBold)
-                }
-            }
-            Column {
-                if (eyebrow != null) {
-                    Text(
-                        eyebrow.uppercase(),
-                        color = colors.brandDark,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        letterSpacing = 1.1.sp,
+                IconButton(onClick = onBack) {
+                    Icon(
+                        if (navIcon == NavIcon.Close) Icons.Default.Close else Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = if (navIcon == NavIcon.Close) "Close" else "Back to $backLabel",
+                        tint = colors.ink,
                     )
                 }
-                Text(title, color = colors.ink, fontSize = 28.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.5).sp)
+                Spacer(Modifier.width(4.dp))
+            }
+            Text(
+                title,
+                color = colors.ink,
+                fontSize = 22.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f).semantics { heading() },
+            )
+            barAction?.invoke()
+            OverflowMenu(actions, "More actions for $title")
+        }
+        if (scrolled) HorizontalDivider(color = colors.border)
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .imePadding()
+                    .verticalScroll(scroll)
+                    .padding(start = 20.dp, end = 20.dp, top = 4.dp, bottom = if (showFab) 96.dp else 28.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
                 if (lead != null) {
-                    Spacer(Modifier.height(4.dp))
                     Text(lead, color = colors.inkMuted, fontSize = 16.sp, lineHeight = 22.sp)
                 }
+                content()
             }
-            content()
+            if (showFab && onFab != null) {
+                ExtendedFloatingActionButton(
+                    onClick = onFab,
+                    icon = { Icon(Icons.Default.Add, contentDescription = null) },
+                    text = { Text(fabLabel, fontWeight = FontWeight.Bold) },
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 16.dp),
+                    containerColor = colors.brandFill,
+                    contentColor = colors.onBrandFill,
+                )
+            }
         }
-        if (showFab && onFab != null) {
-            FloatingActionButton(
-                onClick = onFab,
-                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 16.dp),
-                containerColor = colors.brand,
-                contentColor = Color.White,
+        if (bottomBar != null) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .shadow(8.dp)
+                    .background(colors.surface)
+                    .padding(horizontal = 20.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Icon(Icons.Default.Add, contentDescription = fabLabel)
+                bottomBar()
             }
         }
     }
 }
 
 @Composable
-fun SurfaceCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+fun OverflowMenu(actions: List<MenuAction>, contentDescription: String) {
+    if (actions.isEmpty()) return
+    val colors = LocalAppColors.current
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { open = true }) {
+            Icon(Icons.Default.MoreVert, contentDescription = contentDescription, tint = colors.inkMuted)
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            actions.forEach { action ->
+                DropdownMenuItem(
+                    text = { Text(action.label, color = if (action.destructive) colors.danger else Color.Unspecified) },
+                    onClick = {
+                        open = false
+                        action.onClick()
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun SurfaceCard(modifier: Modifier = Modifier, highlighted: Boolean = false, content: @Composable ColumnScope.() -> Unit) {
     val colors = LocalAppColors.current
     Column(
         modifier
             .fillMaxWidth()
             .shadow(2.dp, CardShape)
             .clip(CardShape)
-            .background(colors.surface)
+            .background(if (highlighted) colors.brandSoft else colors.surface)
+            .then(if (highlighted) Modifier.border(2.dp, colors.brand, CardShape) else Modifier)
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
         content = content,
@@ -199,15 +261,40 @@ fun PrimaryButton(label: String, onClick: () -> Unit, modifier: Modifier = Modif
             .fillMaxWidth()
             .height(52.dp)
             .clip(RoundedCornerShape(16.dp))
-            .background(if (active) colors.brand else colors.brand.copy(alpha = 0.45f))
+            .background(if (active) colors.brandFill else colors.brandFill.copy(alpha = 0.45f))
             .clickable(enabled = active, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         if (loading) {
-            CircularProgressIndicator(Modifier.size(22.dp), color = Color.White, strokeWidth = 2.dp)
+            CircularProgressIndicator(Modifier.size(22.dp), color = colors.onBrandFill, strokeWidth = 2.dp)
         } else {
-            Text(label, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            Text(label, color = colors.onBrandFill, fontWeight = FontWeight.Bold, fontSize = 16.sp)
         }
+    }
+}
+
+@Composable
+fun SecondaryButton(
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    contentDescription: String = label,
+) {
+    val colors = LocalAppColors.current
+    Box(
+        modifier
+            .fillMaxWidth()
+            .height(48.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .border(1.5.dp, colors.brand, RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .semantics {
+                role = Role.Button
+                this.contentDescription = contentDescription
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, color = colors.brandDark, fontWeight = FontWeight.Bold, fontSize = 15.sp)
     }
 }
 
@@ -243,7 +330,7 @@ fun ChoiceChip(
     val colors = LocalAppColors.current
     Text(
         label,
-        color = if (selected) colors.brandDark else colors.ink,
+        color = if (selected) colors.selectedText else colors.ink,
         fontWeight = FontWeight.SemiBold,
         fontSize = 13.sp,
         modifier = modifier
@@ -283,42 +370,6 @@ fun TextLink(
     )
 }
 
-class SaveAck {
-    var visible by mutableStateOf(false)
-    var token by mutableLongStateOf(0L)
-
-    fun mark(ok: Boolean) {
-        if (ok) {
-            visible = true
-            token = System.nanoTime()
-        } else {
-            visible = false
-        }
-    }
-}
-
-@Composable
-fun rememberSaveAck(): SaveAck {
-    val ack = remember { SaveAck() }
-    LaunchedEffect(ack.token) {
-        if (ack.token == 0L) return@LaunchedEffect
-        delay(1600)
-        ack.visible = false
-    }
-    return ack
-}
-
-@Composable
-fun SavedHint(visible: Boolean) {
-    if (!visible) return
-    Text(
-        "Saved",
-        color = LocalAppColors.current.success,
-        fontSize = 13.sp,
-        fontWeight = FontWeight.Medium,
-    )
-}
-
 @Composable
 fun DangerOutlineButton(label: String, onClick: () -> Unit, enabled: Boolean = true) {
     val colors = LocalAppColors.current
@@ -355,11 +406,23 @@ fun EmptyState(title: String, description: String, actionLabel: String, onAction
 
 @Composable
 fun SectionTitle(text: String) {
-    Text(text, color = LocalAppColors.current.ink, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+    Text(
+        text,
+        color = LocalAppColors.current.ink,
+        fontWeight = FontWeight.Bold,
+        fontSize = 18.sp,
+        modifier = Modifier.semantics { heading() },
+    )
 }
 
 @Composable
-fun SettingsRow(title: String, description: String, onClick: () -> Unit, value: String? = null) {
+fun SettingsRow(
+    title: String,
+    description: String,
+    onClick: () -> Unit,
+    value: String? = null,
+    destructive: Boolean = false,
+) {
     val colors = LocalAppColors.current
     Row(
         Modifier
@@ -374,7 +437,7 @@ fun SettingsRow(title: String, description: String, onClick: () -> Unit, value: 
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(title, color = colors.ink, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            Text(title, color = if (destructive) colors.danger else colors.ink, fontWeight = FontWeight.Bold, fontSize = 16.sp)
             Text(description, color = colors.inkMuted, fontSize = 13.sp, lineHeight = 18.sp)
         }
         if (value != null) {
@@ -400,10 +463,16 @@ fun HistoryRow(
     trailing: @Composable (() -> Unit)? = null,
     overflowLabel: String? = null,
     onOverflow: (() -> Unit)? = null,
+    highlighted: Boolean = false,
 ) {
     val colors = LocalAppColors.current
     var menuOpen by remember { mutableStateOf(false) }
-    SurfaceCard(Modifier.clickable(onClick = onClick)) {
+    SurfaceCard(
+        Modifier
+            .clickable(onClick = onClick)
+            .semantics { if (highlighted) stateDescription = "Just saved" },
+        highlighted = highlighted,
+    ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(primary, color = colors.ink, fontWeight = FontWeight.Bold, fontSize = 16.sp)
@@ -435,6 +504,7 @@ fun HistoryRow(
 @Composable
 fun BpBadge(status: BpStatus, compact: Boolean = false, systolic: Int? = null, diastolic: Int? = null) {
     var showGuide by remember { mutableStateOf(false) }
+    val colors = LocalAppColors.current
     val color = Color(status.color)
     Box(
         Modifier
@@ -448,14 +518,14 @@ fun BpBadge(status: BpStatus, compact: Boolean = false, systolic: Int? = null, d
     ) {
         Text(
             status.label,
-            color = color,
+            color = colors.statusText(color),
             fontSize = if (compact) 11.sp else 12.sp,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
             softWrap = false,
             modifier = Modifier
                 .clip(RoundedCornerShape(999.dp))
-                .background(color.copy(alpha = 0.14f))
+                .background(color.copy(alpha = STATUS_TINT_ALPHA))
                 .padding(
                     horizontal = if (compact) 8.dp else 10.dp,
                     vertical = if (compact) 3.dp else 4.dp,
@@ -476,6 +546,7 @@ fun BloodPressureCategoriesDialog(selected: BpStatus, isolatedNote: String? = nu
     val colors = LocalAppColors.current
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = LocalAppColors.current.surface,
         title = { Text("Blood pressure categories") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -505,14 +576,40 @@ private fun CategoryGuideRow(category: BpStatus, highlighted: Boolean) {
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(if (highlighted) tint.copy(alpha = 0.12f) else Color.Transparent)
+            .background(if (highlighted) tint.copy(alpha = STATUS_TINT_ALPHA) else Color.Transparent)
             .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        Text(category.label, color = tint, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+        Text(category.label, color = colors.statusText(tint), fontWeight = FontWeight.Bold, fontSize = 14.sp)
         Text(category.range, color = colors.ink, fontWeight = FontWeight.Medium, fontSize = 13.sp)
         Text(category.description, color = colors.inkMuted, fontSize = 13.sp, lineHeight = 18.sp)
     }
+}
+
+/** Two-button confirm. [destructive] styles the confirm action as a delete or discard. */
+@Composable
+fun ConfirmDialog(
+    title: String,
+    body: String,
+    confirmLabel: String,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+    dismissLabel: String = "Cancel",
+    destructive: Boolean = false,
+) {
+    val colors = LocalAppColors.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = LocalAppColors.current.surface,
+        title = { Text(title) },
+        text = { Text(body) },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(confirmLabel, color = if (destructive) colors.danger else colors.brandDark, fontWeight = FontWeight.SemiBold)
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(dismissLabel, color = colors.brandDark) } },
+    )
 }
 
 @Composable
@@ -522,14 +619,17 @@ fun ConfirmDeleteDialog(
     confirmLabel: String = "Delete",
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = { Text(body) },
-        confirmButton = { TextButton(onClick = onConfirm) { Text(confirmLabel) } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
+    dismissLabel: String = "Cancel",
+) = ConfirmDialog(title, body, confirmLabel, onConfirm, onDismiss, dismissLabel, destructive = true)
+
+/** "Last time: …" with a Use action. A suggestion only; forms never prefill from it. */
+@Composable
+fun LastTimeSuggestion(text: String, onUse: (() -> Unit)?, useDescription: String = "Use last time's values") {
+    val colors = LocalAppColors.current
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(text, color = colors.inkMuted, fontWeight = FontWeight.Medium, fontSize = 13.sp, modifier = Modifier.weight(1f))
+        if (onUse != null) TextLink("Use", onClick = onUse, contentDescription = useDescription)
+    }
 }
 
 /** Single-button alert, equivalent to a plain `Alert.alert(title, body)` in the Expo app. */
@@ -537,6 +637,7 @@ fun ConfirmDeleteDialog(
 fun MessageDialog(title: String, body: String, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = LocalAppColors.current.surface,
         title = { Text(title) },
         text = { Text(body) },
         confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } },
@@ -699,7 +800,7 @@ fun BmiGauge(bmi: Double, goalBmi: Double, compact: Boolean = false) {
             caption,
             modifier = Modifier.fillMaxWidth(),
             textAlign = TextAlign.Center,
-            color = category?.let { Color(it.color) } ?: colors.inkMuted,
+            color = category?.let { colors.hueText(Color(it.color)) } ?: colors.inkMuted,
             fontWeight = FontWeight.SemiBold,
         )
     }
@@ -723,6 +824,7 @@ fun BmiCategoriesDialog(selected: BmiCategory?, onDismiss: () -> Unit) {
     val colors = LocalAppColors.current
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = LocalAppColors.current.surface,
         title = { Text("Body Mass Index") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -741,7 +843,7 @@ fun BmiCategoriesDialog(selected: BmiCategory?, onDismiss: () -> Unit) {
                             .background(if (category == selected) tint.copy(alpha = 0.12f) else Color.Transparent)
                             .padding(horizontal = 10.dp, vertical = 8.dp),
                     ) {
-                        Text(category.label, color = tint, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Text(category.label, color = colors.statusText(tint), fontWeight = FontWeight.Bold, fontSize = 14.sp)
                         Text(category.range, color = colors.inkMuted, fontSize = 13.sp)
                     }
                 }
@@ -765,7 +867,8 @@ fun BloodPressureChart(readings: List<BloodPressureReading>, all: List<BloodPres
     } else {
         listOf(0, chronological.lastIndex / 2, chronological.lastIndex).distinct()
     }
-    Canvas(Modifier.fillMaxWidth().height(200.dp)) {
+    val description = describeBloodPressureChart(chronological)
+    Canvas(Modifier.fillMaxWidth().height(200.dp).semantics { contentDescription = description }) {
         val padL = 44.dp.toPx()
         val padR = 12.dp.toPx()
         val padT = 16.dp.toPx()
@@ -974,7 +1077,8 @@ fun WeightChart(model: WeightChartModel, goal: Double?, useKg: Boolean = false) 
         listOf(shown(point.weight), shown(model.trendByDate[point.date] ?: point.weight))
     } + listOfNotNull(goal?.let { shown(it) })
     if (values.isEmpty()) return
-    Canvas(Modifier.fillMaxWidth().height(200.dp)) {
+    val description = describeWeightChart(model, goal, useKg)
+    Canvas(Modifier.fillMaxWidth().height(200.dp).semantics { contentDescription = description }) {
         val padL = 48.dp.toPx()
         val padR = 12.dp.toPx()
         val padT = 16.dp.toPx()
@@ -1066,8 +1170,9 @@ fun WorkoutBarChart(
 ) {
     val colors = LocalAppColors.current
     val values = data.map(valueOf)
-    Text(title, color = colors.inkMuted, fontSize = 12.sp)
-    Canvas(Modifier.fillMaxWidth().height(160.dp)) {
+    val description = describeWeekBars(data, title, valueOf)
+    Text(title, color = colors.inkMuted, fontSize = 12.sp, modifier = Modifier.clearAndSetSemantics {})
+    Canvas(Modifier.fillMaxWidth().height(160.dp).semantics { contentDescription = description }) {
         val maxCount = values.maxOrNull()?.coerceAtLeast(1) ?: 1
         val padL = 22.dp.toPx()
         val gap = 8.dp.toPx()
@@ -1104,7 +1209,7 @@ fun WorkoutBarChart(
             )
         }
     }
-    Row(Modifier.fillMaxWidth().padding(start = 22.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+    Row(Modifier.fillMaxWidth().padding(start = 22.dp).clearAndSetSemantics {}, horizontalArrangement = Arrangement.SpaceBetween) {
         data.forEach { bucket ->
             Text(bucket.label, color = colors.inkFaint, fontSize = 9.sp, modifier = Modifier.weight(1f), textAlign = TextAlign.Center, maxLines = 1)
         }

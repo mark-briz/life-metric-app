@@ -58,9 +58,11 @@ fun buildAccountExport(store: FitnessStore, themeId: String, exportedAt: String)
     return prettyJson.encodeToString(JsonObject.serializer(), root)
 }
 
-private fun dataObject(store: FitnessStore): JsonObject = buildJsonObject {
-    put("plans", buildJsonArray { store.plans.forEach { add(planObject(it)) } })
-    put("workouts", buildJsonArray { store.workouts.forEach { add(workoutObject(it)) } })
+private fun dataObject(store: FitnessStore): JsonObject {
+    val (plans, workouts) = attachMissingActivities(store.plans, store.workouts)
+    return buildJsonObject {
+        put("plans", buildJsonArray { plans.forEach { add(planObject(it)) } })
+        put("workouts", buildJsonArray { workouts.forEach { add(workoutObject(it)) } })
     put(
         "weightRecords",
         buildJsonArray {
@@ -146,6 +148,7 @@ private fun dataObject(store: FitnessStore): JsonObject = buildJsonObject {
             put("workoutRestTimerSec", store.profile.workoutRestTimerSec)
         },
     )
+    }
 }
 
 /** The Expo app stores weight rows under uuid ids; rewrite legacy prefixed ids so the file loads there too. */
@@ -268,9 +271,10 @@ private fun normalizeAppData(value: JsonElement): FitnessStore? {
     val workoutsRaw = data["workouts"] as? JsonArray ?: return null
     val plans = plansRaw.mapNotNull(::parsePlan)
     val workouts = workoutsRaw.mapNotNull { parseWorkout(it, plans) }
+    val (resolvedPlans, resolvedWorkouts) = attachMissingActivities(plans, workouts)
     return FitnessStore(
-        plans = plans,
-        workouts = workouts,
+        plans = resolvedPlans,
+        workouts = resolvedWorkouts,
         weightRecords = normalizeWeights(data["weightRecords"]),
         bloodPressureReadings = normalizeBloodPressure(data["bloodPressureReadings"]),
         profile = normalizeProfile(data["profile"]),
@@ -399,6 +403,79 @@ private fun parseWorkout(value: JsonElement, plans: List<FitnessPlan>): Workout?
 
 private fun isIsoDate(value: String): Boolean =
     Regex("""^\d{4}-\d{2}-\d{2}$""").matches(value) && runCatching { LocalDate.parse(value) }.isSuccess
+
+/**
+ * Plans are applied first. Any workout entry that still points at an activity
+ * missing from its plan gets that activity attached so the file can load.
+ */
+private fun attachMissingActivities(
+    plans: List<FitnessPlan>,
+    workouts: List<Workout>,
+): Pair<List<FitnessPlan>, List<Workout>> {
+    if (plans.isEmpty() || workouts.isEmpty()) return plans to workouts
+
+    val machinesById = LinkedHashMap<String, Machine>()
+    plans.forEach { plan ->
+        plan.machines.forEach { machine -> machinesById.putIfAbsent(machine.id, machine) }
+    }
+    val usedIds = machinesById.keys.toMutableSet()
+    val extras = LinkedHashMap<String, MutableList<Machine>>()
+    val remap = HashMap<Pair<String, String>, String>()
+
+    fun idsOnPlan(planId: String): Set<String> = buildSet {
+        plans.find { it.id == planId }?.machines?.forEach { add(it.id) }
+        extras[planId]?.forEach { add(it.id) }
+    }
+
+    workouts.forEach { workout ->
+        if (plans.none { it.id == workout.planId }) return@forEach
+        workout.entries.forEach { entry ->
+            val machineId = entry.machineId
+            if (machineId.isBlank() || machineId in idsOnPlan(workout.planId)) return@forEach
+            if ((workout.planId to machineId) in remap) return@forEach
+
+            val source = machinesById[machineId]
+            val newId = unusedActivityId(machineId, usedIds)
+            usedIds.add(newId)
+            extras.getOrPut(workout.planId) { mutableListOf() }.add(
+                Machine(newId, source?.name ?: "Unknown activity", source?.description.orEmpty()),
+            )
+            if (newId != machineId) remap[workout.planId to machineId] = newId
+        }
+    }
+
+    if (extras.isEmpty()) return plans to workouts
+
+    val nextPlans = plans.map { plan ->
+        val added = extras[plan.id].orEmpty()
+        if (added.isEmpty()) plan else plan.copy(machines = plan.machines + added)
+    }
+    val nextWorkouts = if (remap.isEmpty()) {
+        workouts
+    } else {
+        workouts.map { workout ->
+            var changed = false
+            val entries = workout.entries.map { entry ->
+                val nextId = remap[workout.planId to entry.machineId] ?: return@map entry
+                changed = true
+                entry.copy(machineId = nextId)
+            }
+            if (changed) workout.copy(entries = entries) else workout
+        }
+    }
+    return nextPlans to nextWorkouts
+}
+
+private fun unusedActivityId(preferred: String, used: Set<String>): String {
+    if (preferred !in used) return preferred
+    var n = 2
+    var candidate = "$preferred-$n"
+    while (candidate in used) {
+        n += 1
+        candidate = "$preferred-$n"
+    }
+    return candidate
+}
 
 private fun normalizeWeights(value: JsonElement?): List<WeightRecord> {
     val array = value as? JsonArray ?: return emptyList()
