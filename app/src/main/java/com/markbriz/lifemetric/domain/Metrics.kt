@@ -340,6 +340,31 @@ fun emptyWorkoutEntry(plan: FitnessPlan): WorkoutEntry {
     )
 }
 
+const val REMOVED_ACTIVITY_NAME = "Removed activity"
+
+/**
+ * Logged sets keep their activity id after that activity is removed from its plan.
+ * Put a placeholder activity back so an export still satisfies the file's
+ * "every set points at an activity on its plan" rule and can be imported.
+ */
+fun plansWithLoggedActivities(plans: List<FitnessPlan>, workouts: List<Workout>): List<FitnessPlan> {
+    val entriesByPlan = workouts.groupBy { it.planId }
+    val usedIds = plans.flatMap { it.machines }.map { it.id }.toMutableSet()
+    return plans.map { plan ->
+        val missing = entriesByPlan[plan.id].orEmpty()
+            .flatMap { it.entries }
+            .map { it.machineId }
+            .filter { it.isNotBlank() && it !in usedIds }
+            .distinct()
+        missing.forEach { usedIds.add(it) }
+        if (missing.isEmpty()) {
+            plan
+        } else {
+            plan.copy(machines = plan.machines + missing.map { id -> Machine(id, REMOVED_ACTIVITY_NAME) })
+        }
+    }
+}
+
 fun activityIdsWithSameName(plans: List<FitnessPlan>, activityId: String): Set<String> {
     if (activityId.isBlank()) return emptySet()
     val activities = plans.flatMap { it.machines }

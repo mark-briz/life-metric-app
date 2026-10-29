@@ -1,6 +1,8 @@
 package com.markbriz.lifemetric
 
+import com.markbriz.lifemetric.domain.REMOVED_ACTIVITY_NAME
 import com.markbriz.lifemetric.domain.bloodPressureStatus
+import com.markbriz.lifemetric.domain.plansWithLoggedActivities
 import com.markbriz.lifemetric.domain.BpStatus
 import com.markbriz.lifemetric.domain.calculateBmi
 import com.markbriz.lifemetric.domain.bmiCategory
@@ -332,6 +334,32 @@ class MetricsTest {
             load("e1", "p", "m", 100.0, 8),
             load("e2", "p", "m", 110.0, 6),
         )))
+    }
+
+    @Test
+    fun exportRepairKeepsOnePlaceholderForARemovedActivity() {
+        val workout = Workout(
+            "w1",
+            "2026-10-01",
+            "plan-1",
+            "strength_training",
+            listOf(
+                load("e1", "plan-1", "machine-1", 100.0, 8),
+                load("e2", "plan-1", "machine-1", 110.0, 6),
+            ),
+        )
+        val plan = FitnessPlan(
+            id = "plan-1",
+            name = "Upper",
+            activityTypeId = "strength_training",
+            category = "strength",
+            machines = listOf(Machine("machine-2", "Row")),
+        )
+        val repaired = plansWithLoggedActivities(listOf(plan), listOf(workout))
+        assertEquals(listOf("machine-2", "machine-1"), repaired[0].machines.map { it.id })
+        assertEquals(REMOVED_ACTIVITY_NAME, repaired[0].machines[1].name)
+        val complete = plan.copy(machines = plan.machines + Machine("machine-1", "Bench"))
+        assertEquals(complete, plansWithLoggedActivities(listOf(complete), listOf(workout))[0])
     }
 
     @Test
