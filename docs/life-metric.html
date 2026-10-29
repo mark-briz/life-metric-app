@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Life Metric — Blood pressure, weight, and workouts on this phone</title>
+  <meta name="description" content="Life Metric is a private tracker for blood pressure, weight, and workouts. No account. No cloud. Your numbers stay on this phone, behind your device lock.">
+  <meta property="og:title" content="Life Metric — Move with intention">
+  <meta property="og:description" content="Track blood pressure, weight, and workouts on this phone. No account. No cloud.">
+  <meta property="og:type" content="website">
+  <meta name="theme-color" content="#0f766e">
+  <style>
+    :root {
+      --brand: #0d9488;
+      --brand-dark: #0f766e;
+      --brand-soft: #ccfbf1;
+      --accent: #ea580c;
+      --ink: #0f172a;
+      --muted: #475569;
+      --faint: #64748b;
+      --line: #e2e8f0;
+      --surface: #ffffff;
+      --bg: #f8fafc;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      font: 18px/1.55 "Segoe UI", system-ui, sans-serif;
+      background:
+        radial-gradient(1200px 500px at 10% -10%, #d1fae5 0%, transparent 55%),
+        radial-gradient(900px 420px at 100% 0%, #ffedd5 0%, transparent 50%),
+        var(--bg);
+    }
+    a { color: var(--brand-dark); }
+    img { max-width: 100%; height: auto; }
+    .wrap { width: min(1080px, calc(100% - 40px)); margin: 0 auto; }
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      backdrop-filter: blur(14px);
+      background: rgba(248, 250, 252, 0.86);
+      border-bottom: 1px solid rgba(226, 232, 240, 0.8);
+    }
+    .nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      min-height: 64px;
+    }
+    .mark {
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      font-size: 13px;
+      color: var(--brand-dark);
+      text-decoration: none;
+    }
+    .nav a.skip { color: var(--muted); text-decoration: none; font-size: 15px; }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 48px;
+      padding: 0 18px;
+      border-radius: 14px;
+      background: var(--brand-dark);
+      color: #fff;
+      font-weight: 700;
+      text-decoration: none;
+    }
+    .btn:hover { background: #115e59; }
+    .btn.ghost {
+      background: transparent;
+      color: var(--brand-dark);
+      border: 1.5px solid var(--brand);
+    }
+    hero, section { display: block; }
+    .hero { padding: 56px 0 28px; }
+    h1 {
+      margin: 8px 0 16px;
+      font-size: clamp(36px, 6vw, 56px);
+      line-height: 1.08;
+      letter-spacing: -0.03em;
+    }
+    .lede { max-width: 38rem; color: var(--muted); font-size: 20px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 28px; }
+    .pills { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; }
+    .pill {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 8px 14px;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--muted);
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+      padding: 12px 0 48px;
+    }
+    .card {
+      background: var(--surface);
+      border-radius: 24px;
+      padding: 22px;
+      box-shadow: 0 8px 30px rgba(15, 23, 42, 0.06);
+    }
+    .card h2 { margin: 0 0 8px; font-size: 22px; }
+    .card p { margin: 0; color: var(--muted); }
+    .icon {
+      width: 44px; height: 44px; border-radius: 14px;
+      display: grid; place-items: center;
+      background: var(--brand-soft); color: var(--brand-dark);
+      font-weight: 800; margin-bottom: 14px;
+    }
+    .shot {
+      display: grid;
+      grid-template-columns: 1.05fr 0.95fr;
+      gap: 28px;
+      align-items: center;
+      padding: 12px 0 56px;
+    }
+    .phones {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    .shot img {
+      border-radius: 28px;
+      box-shadow: 0 18px 50px rgba(15, 23, 42, 0.14);
+      border: 1px solid var(--line);
+    }
+    .list { margin: 0; padding-left: 1.15rem; color: var(--muted); }
+    .list li { margin: 8px 0; }
+    .privacy {
+      background: #042f2e;
+      color: #ecfdf5;
+      border-radius: 28px;
+      padding: 28px;
+      margin: 8px 0 56px;
+    }
+    .privacy h2 { margin: 0 0 8px; }
+    .privacy p { margin: 0; color: #99f6e4; }
+    .note {
+      padding: 28px 0 64px;
+      color: var(--faint);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    footer {
+      border-top: 1px solid var(--line);
+      padding: 22px 0 36px;
+      color: var(--faint);
+      font-size: 14px;
+    }
+    @media (max-width: 800px) {
+      .grid, .shot, .phones { grid-template-columns: 1fr; }
+      .nav .skip { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap nav">
+      <a class="mark" href="#top">LIFE METRIC</a>
+      <a class="skip" href="#privacy">Privacy</a>
+      <a class="btn" href="#get">Get the app</a>
+    </div>
+  </header>
+
+  <main id="top" class="wrap">
+    <section class="hero">
+      <p class="mark">PERSONAL HEALTH LOG</p>
+      <h1>Move with intention.</h1>
+      <p class="lede">
+        Track blood pressure, weight, and workouts in one place. Life Metric is a
+        private log for numbers you already measure — not a coach, not a clinic,
+        and not another account to manage.
+      </p>
+      <div class="actions">
+        <a class="btn" href="#get">Get Life Metric</a>
+        <a class="btn ghost" href="#how">See what it tracks</a>
+      </div>
+      <div class="pills">
+        <span class="pill">No account</span>
+        <span class="pill">No cloud sync</span>
+        <span class="pill">Protected by your phone lock</span>
+        <span class="pill">Android 8+</span>
+      </div>
+    </section>
+
+    <section id="how" class="grid">
+      <article class="card">
+        <div class="icon" aria-hidden="true">BP</div>
+        <h2>Blood pressure</h2>
+        <p>Log systolic, diastolic, and optional heart rate. See the latest reading, a trend chart, AHA category labels, and how often you stay at or under the target your clinician gave you.</p>
+      </article>
+      <article class="card">
+        <div class="icon" aria-hidden="true">lb</div>
+        <h2>Weight</h2>
+        <p>Record scale readings, watch a 7-day trend, and follow a goal you set. BMI and waist are optional body measures, calculated from height you enter.</p>
+      </article>
+      <article class="card">
+        <div class="icon" aria-hidden="true">W</div>
+        <h2>Workouts</h2>
+        <p>Build a plan, then log the session. Strength sets, cardio time, rest timer, and a week view against the familiar 150-minute / 2-strength-day adult activity target.</p>
+      </article>
+    </section>
+
+    <section class="shot">
+      <div>
+        <h2>One dashboard. Three logs.</h2>
+        <p class="lede" style="font-size:18px">
+          Open the app and see the last blood pressure, the weight trend, and the last workout.
+          Each area has the same layout: latest value, trend, goal, then history.
+        </p>
+        <ul class="list">
+          <li>Reminders on this phone, if you want them — morning or evening.</li>
+          <li>Export or load a JSON backup from Profile. You stay in control of the file.</li>
+          <li>Four color themes, including Dark.</li>
+        </ul>
+      </div>
+      <div class="phones">
+        <img src="phase4-screens/01-home-top.png" width="540" height="1080" alt="Life Metric dashboard showing the latest blood pressure reading, trend chart, and weight card.">
+        <img src="phase4-screens/02-home-weight-workout.png" width="540" height="1080" alt="Life Metric dashboard showing the weight trend, BMI gauge, and last workout.">
+      </div>
+    </section>
+
+    <section id="privacy" class="privacy">
+      <h2>Your numbers stay on this phone.</h2>
+      <p>
+        Life Metric does not create an account, does not sign you in, and does not
+        upload your readings to a server. Data is stored only in the app’s private
+        storage and is protected by your device lock. If you uninstall the app
+        without exporting, that data is gone.
+      </p>
+    </section>
+
+    <section id="get" class="card" style="margin-bottom:48px">
+      <h2>Get Life Metric on Google Play</h2>
+      <p>
+        Free to install. No in-app purchases required to use blood pressure, weight,
+        or workout tracking. Requires Android 8.0 or later.
+      </p>
+      <div class="actions">
+        <a class="btn" href="https://play.google.com/store/apps/details?id=com.markbriz.lifemetric">Open in Google Play</a>
+      </div>
+    </section>
+
+    <section class="note">
+      <strong>Not medical advice.</strong>
+      Life Metric is a personal record-keeping app. It is not a medical device,
+      not an emergency service, and not a substitute for professional healthcare.
+      Category labels (including AHA blood pressure categories and BMI ranges) are
+      for self-tracking only. They are not a diagnosis. If you think you may be
+      having a medical emergency, call emergency services.
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap">Life Metric · Version 1.1.0 · Data stored only on this device</div>
+  </footer>
+</body>
+</html>

@@ -95,7 +95,6 @@ import com.markbriz.lifemetric.ui.components.GhostButton
 import com.markbriz.lifemetric.ui.components.HeroHeader
 import com.markbriz.lifemetric.ui.components.HistoryRow
 import com.markbriz.lifemetric.ui.components.LabeledField
-import com.markbriz.lifemetric.ui.components.LastTimeSuggestion
 import com.markbriz.lifemetric.ui.components.MenuAction
 import com.markbriz.lifemetric.ui.components.PrimaryButton
 import com.markbriz.lifemetric.ui.components.RecordFormScaffold
@@ -459,7 +458,9 @@ fun WeightFormScreen(
     val unit = weightUnit(useKg)
     var date by remember(existing?.id) { mutableStateOf(existing?.date ?: todayIso()) }
     var time by remember(existing?.id) { mutableStateOf(existing?.time ?: nowTime()) }
-    var weight by remember(existing?.id) { mutableStateOf(existing?.weight?.let { formatWeightValue(it, useKg) }.orEmpty()) }
+    var weight by remember(existing?.id) {
+        mutableStateOf((existing?.weight ?: lastWeight)?.let { formatWeightValue(it, useKg) }.orEmpty())
+    }
     var selectedTags by remember(existing?.id) { mutableStateOf(existing?.tags?.toSet().orEmpty()) }
     var note by remember(existing?.id) { mutableStateOf(existing?.note.orEmpty()) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -502,13 +503,6 @@ fun WeightFormScreen(
         SurfaceCard {
             DateTimeFields(date, time, { date = it }, { time = it })
             Text("Weight ($unit)", color = LocalAppColors.current.inkMuted, fontWeight = FontWeight.Medium)
-            if (!isEdit && lastWeight != null) {
-                LastTimeSuggestion(
-                    "Last time: ${formatWeightWithUnit(lastWeight, useKg)}.",
-                    onUse = { weight = formatWeightValue(lastWeight, useKg) },
-                    useDescription = "Use last weight",
-                )
-            }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 GhostButton(
                     "−",
@@ -521,7 +515,7 @@ fun WeightFormScreen(
                     onValueChange = { weight = it },
                     modifier = Modifier.weight(1f),
                     error = error,
-                    hint = if (isEdit) "Use − / + to adjust by 0.1 $unit." else "Type the number from the scale.",
+                    hint = if (isEdit || lastWeight != null) "Use − / + to adjust by 0.1 $unit." else "Type the number from the scale.",
                     keyboardType = KeyboardType.Decimal,
                 )
                 GhostButton(
