@@ -290,7 +290,7 @@ fun WorkoutEntryFormScreen(
         ) {}
         return
     }
-    val schema = ActivityCatalog.schema(plan.activityTypeId)
+    val schema = ActivityCatalog.entrySchema(existing, plan.activityTypeId)
     val isNew = existing == null
     val tabataDefaults = isNew && plan.activityTypeId == "tabata"
     val entryId = remember(existing?.id) { existing?.id ?: newId("entry") }
@@ -337,7 +337,11 @@ fun WorkoutEntryFormScreen(
     }
     var intensity by remember(existing?.id) { mutableStateOf(existing?.intensity.orEmpty()) }
     var note by remember(existing?.id) { mutableStateOf(existing?.note.orEmpty()) }
-    val extraMetrics = ActivityCatalog.entryMetrics(plan.activityTypeId)
+    val extraMetrics = if (schema == ActivityCatalog.schema(plan.activityTypeId)) {
+        ActivityCatalog.entryMetrics(plan.activityTypeId)
+    } else {
+        emptyList()
+    }
     var metricDrafts by remember(existing?.id, plan.activityTypeId) {
         mutableStateOf(
             extraMetrics.associate { metric ->
@@ -437,7 +441,7 @@ fun WorkoutEntryFormScreen(
         backLabel = "Workout",
     ) {
         SurfaceCard {
-            MachineMenu(plan, machineId) { nextId ->
+            MachineMenu(plan, machineId, schema) { nextId ->
                 machineId = nextId
                 if (isNew && schema == "load") {
                     val load = previousLoad(nextId)
@@ -544,10 +548,10 @@ private fun PlanMenu(plans: List<FitnessPlan>, selectedId: String, onSelect: (St
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MachineMenu(plan: FitnessPlan, selectedId: String, onSelect: (String) -> Unit) {
+private fun MachineMenu(plan: FitnessPlan, selectedId: String, schema: String, onSelect: (String) -> Unit) {
     var open by remember { mutableStateOf(false) }
     val selected = plan.machines.find { it.id == selectedId }
-    val label = ActivityCatalog.segmentFieldLabel(ActivityCatalog.schema(plan.activityTypeId))
+    val label = ActivityCatalog.segmentFieldLabel(schema)
     ExposedDropdownMenuBox(expanded = open, onExpandedChange = { open = it }) {
         OutlinedTextField(
             value = selected?.name ?: "Select $label",
