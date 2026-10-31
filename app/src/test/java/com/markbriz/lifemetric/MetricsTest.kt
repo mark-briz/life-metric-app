@@ -81,6 +81,14 @@ class MetricsTest {
     }
 
     @Test
+    fun editedEntryKeepsRecordedSchemaWhenPlanTypeChanges() {
+        val logged = WorkoutEntry("e", "p", "m", schema = "load", weight = 135.0, repetitions = 8)
+        assertEquals("load", ActivityCatalog.entrySchema(logged, "running"))
+        assertEquals("distance_time", ActivityCatalog.entrySchema(null, "running"))
+        assertEquals("distance_time", ActivityCatalog.entrySchema(logged.copy(schema = "not-a-schema"), "running"))
+    }
+
+    @Test
     fun loadEntrySummary() {
         val summary = formatWorkoutEntrySummary(
             WorkoutEntry("e", "p", "m", schema = "load", weight = 135.0, repetitions = 10),
