@@ -269,6 +269,19 @@ class AccountExportTest {
     }
 
     @Test
+    fun exportOfRemovedActivityStillImportsLoggedSets() {
+        val removed = sample.copy(
+            plans = listOf(sample.plans[0].copy(machines = emptyList())),
+        )
+        val parsed = parseAccountExport(buildAccountExport(removed, "mint", "2026-10-12T12:00:00.000Z"))
+        val machines = parsed.data.plans[0].machines
+        assertEquals(listOf("machine-1"), machines.map { it.id })
+        assertEquals("Removed activity", machines[0].name)
+        assertEquals(100.0, parsed.data.workouts[0].entries[0].weight)
+        assertEquals(8, parsed.data.workouts[0].entries[0].repetitions)
+    }
+
+    @Test
     fun rejectsWorkoutPointingAtMissingPlan() {
         val broken = expoFile.replace("\"planId\":\"plan-1\",\"activityTypeId\"", "\"planId\":\"plan-x\",\"activityTypeId\"")
         assertThrowsMessage("plan that is not in the file") { parseAccountExport(broken) }
