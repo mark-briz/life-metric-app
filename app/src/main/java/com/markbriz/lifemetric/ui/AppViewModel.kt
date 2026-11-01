@@ -20,6 +20,7 @@ import com.markbriz.lifemetric.domain.nowTime
 import com.markbriz.lifemetric.domain.roundToTenth
 import com.markbriz.lifemetric.domain.todayIso
 import com.markbriz.lifemetric.domain.validateProfile
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -35,6 +36,8 @@ data class UndoToast(val message: String, val token: Long = System.nanoTime())
 
 data class AppUiState(
     val booting: Boolean = true,
+    /** Set when the saved file exists but could not be read. The file is left unchanged. */
+    val loadError: String? = null,
     /** False until the one-time health disclaimer has been accepted on this device. */
     val disclaimerAccepted: Boolean = false,
     val store: FitnessStore = FitnessStore(),
@@ -60,12 +63,38 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private var lastDeleted: DeletedRecord? = null
 
     init {
+        viewModelScope.launch { openSavedData(splashDelay = true) }
+    }
+
+    /** Reads the file again. Does not write, so a damaged file stays on disk. */
+    fun reload() {
         viewModelScope.launch {
-            val started = System.currentTimeMillis()
-            val file = withContext(Dispatchers.IO) { repo.load() }
+            _state.update { it.copy(booting = true, loadError = null) }
+            openSavedData(splashDelay = false)
+        }
+    }
+
+    private suspend fun openSavedData(splashDelay: Boolean) {
+        val started = System.currentTimeMillis()
+        val loaded = withContext(Dispatchers.IO) {
+            try {
+                Result.success(repo.load())
+            } catch (err: CancellationException) {
+                throw err
+            } catch (err: Exception) {
+                Result.failure(err)
+            }
+        }
+        if (splashDelay && loaded.isSuccess) {
             val elapsed = System.currentTimeMillis() - started
             if (elapsed < 900) delay(900 - elapsed)
-            _state.value = stateFrom(file, booting = false)
+        }
+        mutex.withLock {
+            loaded.onSuccess { file ->
+                _state.value = stateFrom(file, booting = false)
+            }.onFailure {
+                _state.value = AppUiState(booting = false, loadError = UNREADABLE_DATA)
+            }
         }
     }
 
@@ -445,6 +474,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
+    }
+
+    private companion object {
+        const val UNREADABLE_DATA = "The data saved on this phone couldn't be read. It was left unchanged."
     }
 
     private fun stateFrom(file: LocalFile, booting: Boolean): AppUiState = AppUiState(

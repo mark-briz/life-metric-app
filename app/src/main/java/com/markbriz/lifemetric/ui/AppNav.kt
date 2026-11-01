@@ -1,6 +1,8 @@
 package com.markbriz.lifemetric.ui
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -29,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -40,6 +43,7 @@ import com.markbriz.lifemetric.domain.latestWeight
 import com.markbriz.lifemetric.ui.bp.BloodPressureFormScreen
 import com.markbriz.lifemetric.ui.bp.BloodPressureScreen
 import com.markbriz.lifemetric.ui.components.GradientBackground
+import com.markbriz.lifemetric.ui.components.PrimaryButton
 import com.markbriz.lifemetric.ui.home.HomeScreen
 import com.markbriz.lifemetric.ui.profile.AboutScreen
 import com.markbriz.lifemetric.ui.profile.ActivityFormScreen
@@ -113,6 +117,27 @@ fun LifeMetricApp(viewModel: AppViewModel) {
                     fontSize = 36.sp,
                     fontWeight = FontWeight.ExtraBold,
                 )
+            }
+        }
+        return
+    }
+    val loadError = state.loadError
+    if (loadError != null) {
+        GradientBackground {
+            Box(Modifier.fillMaxSize().padding(28.dp), contentAlignment = Alignment.Center) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    Text(
+                        "Life Metric",
+                        color = colors.ink,
+                        fontSize = 36.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                    )
+                    Text(loadError, color = colors.inkMuted, fontSize = 16.sp)
+                    PrimaryButton("Try again", onClick = viewModel::reload)
+                }
             }
         }
         return
