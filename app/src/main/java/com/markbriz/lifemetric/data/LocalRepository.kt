@@ -2,36 +2,71 @@ package com.markbriz.lifemetric.data
 
 import android.content.Context
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
 
-class LocalRepository(context: Context) {
-    private val file = File(context.filesDir, "life-metric-local.json")
+/** The on-disk file exists but could not be read. Callers must not replace it. */
+class UnreadableLocalDataException(cause: Throwable) : Exception("Couldn't read saved data.", cause)
+
+class LocalRepository internal constructor(private val file: File) {
+    constructor(context: Context) : this(File(context.filesDir, "life-metric-local.json"))
+
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
         prettyPrint = true
     }
 
-    /** Loads the local file, migrating the pre-1.1 multi-account layout if present. */
+    /**
+     * Loads the local file, migrating the pre-1.1 multi-account layout if present.
+     * A missing file starts empty. A file that exists but cannot be read throws, so a later
+     * save cannot replace it with starter plans.
+     */
     @Synchronized
     fun load(): LocalFile {
         if (!file.exists()) return fresh()
-        val raw = runCatching { file.readText() }.getOrNull() ?: return fresh()
-        val root = runCatching { json.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return fresh()
-        if (root.containsKey("accounts")) {
-            val migrated = migrateLegacy(raw)
-            save(migrated)
-            return migrated
+        val raw = try {
+            file.readText()
+        } catch (err: IOException) {
+            throw UnreadableLocalDataException(err)
         }
-        return runCatching { json.decodeFromString<LocalFile>(raw) }.getOrElse { fresh() }
+        return try {
+            decode(raw)
+        } catch (err: UnreadableLocalDataException) {
+            throw err
+        } catch (err: SerializationException) {
+            throw UnreadableLocalDataException(err)
+        } catch (err: IllegalArgumentException) {
+            throw UnreadableLocalDataException(err)
+        }
     }
 
+    /**
+     * Replaces the file only after the new contents are flushed. A crash while writing leaves
+     * the previous file in place; [File.writeText] would have already truncated it.
+     */
     @Synchronized
     fun save(data: LocalFile) {
-        file.parentFile?.mkdirs()
-        file.writeText(json.encodeToString(LocalFile.serializer(), data))
+        val directory = file.parentFile ?: throw IOException("Data file has no directory.")
+        if (!directory.isDirectory && !directory.mkdirs()) {
+            throw IOException("Couldn't create the data directory.")
+        }
+        val tmp = File(directory, "${file.name}.tmp")
+        var published = false
+        try {
+            FileOutputStream(tmp).use { out ->
+                out.write(json.encodeToString(LocalFile.serializer(), data).toByteArray(Charsets.UTF_8))
+                out.fd.sync()
+            }
+            if (!tmp.renameTo(file)) throw IOException("Couldn't replace saved data.")
+            published = true
+        } finally {
+            if (!published) tmp.delete()
+        }
     }
 
     @Synchronized
@@ -60,12 +95,23 @@ class LocalRepository(context: Context) {
 
     private fun starterStore() = FitnessStore(plans = ActivityCatalog.starterPlans(), themeId = "mint")
 
+    private fun decode(raw: String): LocalFile {
+        val root = json.parseToJsonElement(raw).jsonObject
+        if (root.containsKey("accounts")) {
+            val migrated = migrateLegacy(raw)
+            save(migrated)
+            return migrated
+        }
+        return json.decodeFromString(LocalFile.serializer(), raw)
+    }
+
     /**
      * Pre-1.1 builds kept a list of password-protected accounts. Carry over the account that was
      * signed in (or the first one), and treat the disclaimer as accepted since sign-up required it.
+     * A file that cannot be decoded throws instead of being replaced with starter plans.
      */
     private fun migrateLegacy(raw: String): LocalFile {
-        val legacy = runCatching { json.decodeFromString<LegacyAccountsFile>(raw) }.getOrNull() ?: return fresh()
+        val legacy = json.decodeFromString<LegacyAccountsFile>(raw)
         val account = legacy.accounts.find { it.id == legacy.sessionUserId } ?: legacy.accounts.firstOrNull()
         return LocalFile(
             store = account?.store ?: starterStore(),
