@@ -366,7 +366,17 @@ class MetricsTest {
             ),
             BloodPressureReading("bp-pm", "2026-10-26", "18:00", 118, 74, 58, period = "evening"),
         )
-        val report = buildBloodPressureReport(readings, 130, 80, "Oct 27, 2026", "2026-10-27")
+        val report = buildBloodPressureReport(
+            readings,
+            130,
+            80,
+            "Oct 27, 2026",
+            "2026-10-27",
+            deviceName = "Mark's Pixel",
+        )
+        assertTrue(report.contains("Life Metric blood pressure report"))
+        assertTrue(report.indexOf("Mark's Pixel") > report.indexOf("Life Metric blood pressure report"))
+        assertTrue(report.indexOf("Generated Oct 27, 2026") > report.indexOf("Mark's Pixel"))
         assertTrue(report.contains("Last 7 days"))
         assertTrue(report.contains("Morning average"))
         assertTrue(report.contains("Evening average"))
@@ -1072,8 +1082,14 @@ class MetricsTest {
         assertTrue(csv.startsWith("date,time,weightLb,tags,note"))
         assertTrue(csv.contains("2026-10-12,07:10,181.4,,after walk"))
         assertTrue(csv.contains("2026-10-12,20:40,184.1,travel,"))
-        val report = buildWeightReport(records, generatedAt = "Tue, Oct 27, 2026 7:00 PM")
+        val report = buildWeightReport(
+            records,
+            generatedAt = "Tue, Oct 27, 2026 7:00 PM",
+            deviceName = "Pixel 8",
+        )
         assertTrue(report.contains("Life Metric weight log"))
+        assertTrue(report.indexOf("Pixel 8") > report.indexOf("Life Metric weight log"))
+        assertTrue(report.indexOf("Tue, Oct 27, 2026 7:00 PM") > report.indexOf("Pixel 8"))
         assertTrue(report.contains("181.4 lb"))
         assertTrue(report.contains("after walk"))
         assertTrue(report.contains("Travel"))

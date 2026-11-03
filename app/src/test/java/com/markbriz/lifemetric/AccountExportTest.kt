@@ -59,7 +59,7 @@ class AccountExportTest {
         bloodPressureReadings = listOf(
             BloodPressureReading("bp-1", "2026-10-02", "08:16", 120, 80, 60),
         ),
-        profile = UserProfile("Ada", "Lovelace", 65, 170.0, 10),
+        profile = UserProfile(heightInches = 65, weightGoalLb = 170.0, bpMovingAverageReadings = 10),
     )
 
     // Same sample the Expo app's accountExport.test.ts uses, as it would be written by that app.
@@ -101,6 +101,32 @@ class AccountExportTest {
         assertEquals(sample.workouts, parsed.data.workouts)
         assertEquals(sample.weightRecords, parsed.data.weightRecords)
         assertEquals(sample.bloodPressureReadings, parsed.data.bloodPressureReadings)
+        val profileJson = root["data"]!!.jsonObject["profile"]!!.jsonObject
+        assertNull(profileJson["firstName"])
+        assertNull(profileJson["lastName"])
+    }
+
+    @Test
+    fun profileWithoutNameFieldsStillImports() {
+        val raw = """
+            {
+              "format": "life-metric-account",
+              "version": 1,
+              "exportedAt": "2026-10-12T12:00:00.000Z",
+              "themeId": "mint",
+              "data": {
+                "plans": [],
+                "workouts": [],
+                "weightRecords": [],
+                "bloodPressureReadings": [],
+                "profile": {"heightInches":65,"weightGoalLb":170,"bpMovingAverageReadings":10}
+              }
+            }
+        """.trimIndent()
+        val parsed = parseAccountExport(raw)
+        assertEquals(65, parsed.data.profile.heightInches)
+        assertEquals(170.0, parsed.data.profile.weightGoalLb)
+        assertEquals(10, parsed.data.profile.bpMovingAverageReadings)
     }
 
     @Test
@@ -176,7 +202,12 @@ class AccountExportTest {
                 )),
             ),
             weightRecords = listOf(WeightRecord("11111111-1111-4111-8111-111111111111", "2026-10-02", "08:15", 180.2)),
-            profile = UserProfile("Ada", "Lovelace", 65, 170.0, 10, "11111111-1111-4111-8111-111111111111"),
+            profile = UserProfile(
+                heightInches = 65,
+                weightGoalLb = 170.0,
+                bpMovingAverageReadings = 10,
+                weightGoalStartId = "11111111-1111-4111-8111-111111111111",
+            ),
         )
         val parsed = parseAccountExport(buildAccountExport(store, "sunset", "2026-10-12T12:00:00.000Z"))
         assertEquals("sunset", parsed.themeId)
@@ -232,8 +263,6 @@ class AccountExportTest {
                 ),
             ),
             profile = UserProfile(
-                firstName = "Ada",
-                lastName = "Lovelace",
                 workoutMorningReminder = true,
                 workoutMorningReminderTime = "06:30",
                 workoutRestTimerSec = 90,
@@ -323,7 +352,7 @@ class AccountExportTest {
                     ),
                 ),
             ),
-            profile = UserProfile("Ada", "Lovelace"),
+            profile = UserProfile(),
         )
         val parsed = parseAccountExport(buildAccountExport(store, "mint", "2026-10-12T12:00:00.000Z"))
         val entry = parsed.data.workouts[0].entries[0]
@@ -380,7 +409,7 @@ class AccountExportTest {
                     ),
                 ),
             ),
-            profile = UserProfile("Ada", "Lovelace", bpTargetSystolic = 130, bpTargetDiastolic = 80),
+            profile = UserProfile(bpTargetSystolic = 130, bpTargetDiastolic = 80),
         )
         val parsed = parseAccountExport(buildAccountExport(store, "mint", "2026-10-12T12:00:00.000Z"))
         val reading = parsed.data.bloodPressureReadings[0]
@@ -407,8 +436,6 @@ class AccountExportTest {
                 ),
             ),
             profile = UserProfile(
-                firstName = "Ada",
-                lastName = "Lovelace",
                 bpMorningReminder = true,
                 bpEveningReminder = true,
                 bpMorningReminderTime = "06:30",
@@ -478,8 +505,6 @@ class AccountExportTest {
                 ),
             ),
             profile = UserProfile(
-                firstName = "Ada",
-                lastName = "Lovelace",
                 weightDisplayKg = true,
                 waistInches = 34.5,
             ),
@@ -522,7 +547,7 @@ class AccountExportTest {
     fun bloodPressureWithoutHeartRateRoundTrips() {
         val store = FitnessStore(
             bloodPressureReadings = listOf(BloodPressureReading("bp-1", "2026-10-02", "08:16", 118, 76, null)),
-            profile = UserProfile("Ada", "Lovelace"),
+            profile = UserProfile(),
         )
         val parsed = parseAccountExport(buildAccountExport(store, "mint", "2026-10-12T12:00:00.000Z"))
         assertEquals(1, parsed.data.bloodPressureReadings.size)
@@ -569,8 +594,6 @@ class AccountExportTest {
         ).first { it.exists() }
         val parsed = parseAccountExport(file.readText())
         assertEquals("mint", parsed.themeId)
-        assertEquals("James", parsed.data.profile.firstName)
-        assertEquals("Carter", parsed.data.profile.lastName)
         assertEquals(70, parsed.data.profile.heightInches)
         assertEquals(185.0, parsed.data.profile.weightGoalLb)
         assertEquals(130, parsed.data.profile.bpTargetSystolic)

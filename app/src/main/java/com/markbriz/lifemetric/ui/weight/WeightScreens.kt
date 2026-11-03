@@ -39,6 +39,7 @@ import com.markbriz.lifemetric.domain.WeightChangeDirection
 import com.markbriz.lifemetric.domain.WeightChartRange
 import com.markbriz.lifemetric.domain.WeightTag
 import com.markbriz.lifemetric.domain.buildWeightCsv
+import com.markbriz.lifemetric.domain.buildWeightPrintTable
 import com.markbriz.lifemetric.domain.buildWeightReport
 import com.markbriz.lifemetric.domain.calculateBmi
 import com.markbriz.lifemetric.domain.chronologicalWeights
@@ -76,6 +77,8 @@ import com.markbriz.lifemetric.domain.weightRecordsInRange
 import com.markbriz.lifemetric.domain.weightTrendDelta
 import com.markbriz.lifemetric.domain.weightUnit
 import com.markbriz.lifemetric.domain.weightWeeklyRate
+import com.markbriz.lifemetric.ui.profile.deviceDisplayName
+import com.markbriz.lifemetric.ui.profile.printWeightTable
 import com.markbriz.lifemetric.ui.profile.shareWeightReport
 import kotlin.math.roundToInt
 import com.markbriz.lifemetric.ui.components.ActiveFilter
@@ -172,12 +175,25 @@ fun WeightScreen(
         }
     }
 
+    val generatedAt = { "${formatDate(todayIso())} ${formatTime(nowTime())}" }
     val shareLog: () -> Unit = {
         val inRange = weightRecordsInRange(store.weightRecords, chartRange)
         shareWeightReport(
             context,
-            buildWeightReport(inRange, generatedAt = "${formatDate(todayIso())} ${formatTime(nowTime())}"),
+            buildWeightReport(inRange, generatedAt = generatedAt(), deviceName = deviceDisplayName(context)),
             buildWeightCsv(inRange),
+        )
+    }
+    val printLog: () -> Unit = {
+        printWeightTable(
+            context,
+            "Weight history",
+            buildWeightPrintTable(
+                store.weightRecords,
+                store.profile,
+                generatedAt(),
+                deviceName = deviceDisplayName(context),
+            ),
         )
     }
 
@@ -189,6 +205,7 @@ fun WeightScreen(
         actions = listOfNotNull(
             MenuAction("How to weigh") { onHowToWeigh() },
             if (store.weightRecords.isNotEmpty()) MenuAction("Share log") { shareLog() } else null,
+            if (store.weightRecords.isNotEmpty()) MenuAction("Print") { printLog() } else null,
             MenuAction("Weight settings") { onSettings() },
         ),
     ) {

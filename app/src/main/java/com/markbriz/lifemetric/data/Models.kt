@@ -100,8 +100,6 @@ data class BloodPressureReading(
 
 @Serializable
 data class UserProfile(
-    val firstName: String = "",
-    val lastName: String = "",
     val heightInches: Int? = null,
     val weightGoalLb: Double? = null,
     val bpMovingAverageReadings: Int = 10,

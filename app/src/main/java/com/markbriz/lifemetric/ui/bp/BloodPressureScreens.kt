@@ -41,6 +41,7 @@ import com.markbriz.lifemetric.domain.bloodPressureSaveWarning
 import com.markbriz.lifemetric.domain.bloodPressureStatus
 import com.markbriz.lifemetric.domain.bloodPressureVisitSummary
 import com.markbriz.lifemetric.domain.buildBloodPressureCsv
+import com.markbriz.lifemetric.domain.buildBloodPressurePrintTable
 import com.markbriz.lifemetric.domain.buildBloodPressureReport
 import com.markbriz.lifemetric.domain.chartBloodPressure
 import com.markbriz.lifemetric.domain.filterBloodPressureReadings
@@ -86,6 +87,8 @@ import com.markbriz.lifemetric.ui.components.Segment
 import com.markbriz.lifemetric.ui.components.SegmentedChoice
 import com.markbriz.lifemetric.ui.components.SurfaceCard
 import com.markbriz.lifemetric.ui.components.TextLink
+import com.markbriz.lifemetric.ui.profile.deviceDisplayName
+import com.markbriz.lifemetric.ui.profile.printBloodPressureTable
 import com.markbriz.lifemetric.ui.profile.shareBloodPressureReport
 import com.markbriz.lifemetric.ui.theme.LocalAppColors
 import kotlinx.coroutines.delay
@@ -152,16 +155,30 @@ fun BloodPressureScreen(
         }
     }
     var pending by remember { mutableStateOf<BloodPressureReading?>(null) }
+    val generatedAt = { "${formatDate(todayIso())} ${formatTime(nowTime())}" }
     val shareReport: () -> Unit = {
+        val deviceName = deviceDisplayName(context)
         shareBloodPressureReport(
             context,
             buildBloodPressureReport(
                 store.bloodPressureReadings,
                 store.profile.bpTargetSystolic,
                 store.profile.bpTargetDiastolic,
-                generatedAt = "${formatDate(todayIso())} ${formatTime(nowTime())}",
+                generatedAt = generatedAt(),
+                deviceName = deviceName,
             ),
             buildBloodPressureCsv(store.bloodPressureReadings),
+        )
+    }
+    val printReport: () -> Unit = {
+        printBloodPressureTable(
+            context,
+            "Blood pressure history",
+            buildBloodPressurePrintTable(
+                store.bloodPressureReadings,
+                generatedAt(),
+                deviceName = deviceDisplayName(context),
+            ),
         )
     }
 
@@ -173,6 +190,7 @@ fun BloodPressureScreen(
         actions = listOfNotNull(
             MenuAction("How to measure") { onHowToMeasure() },
             if (store.bloodPressureReadings.isNotEmpty()) MenuAction("Share report") { shareReport() } else null,
+            if (store.bloodPressureReadings.isNotEmpty()) MenuAction("Print") { printReport() } else null,
             MenuAction("Blood pressure settings") { onSettings() },
         ),
     ) {

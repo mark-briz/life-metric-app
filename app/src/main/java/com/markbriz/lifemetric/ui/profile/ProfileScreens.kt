@@ -298,6 +298,7 @@ fun PlanFormScreen(
     missing: Boolean,
     onBack: () -> Unit,
     onSave: (name: String, description: String, typeId: String) -> String?,
+    onDelete: (() -> Unit)? = null,
 ) {
     if (missing) {
         AppScreen(title = "Plan not found", lead = "That plan may have been deleted.", onBack = onBack, backLabel = "Plans") {}
@@ -319,6 +320,15 @@ fun PlanFormScreen(
         isDirty = fields != initialFields,
         onClose = onBack,
         onSave = { error = onSave(name, description, typeId) },
+        delete = if (existing != null && onDelete != null) {
+            FormDelete(
+                title = "Delete this plan?",
+                body = "Delete ${existing.name}? Past workouts stay in your history.",
+                onConfirm = onDelete,
+            )
+        } else {
+            null
+        },
     ) {
         SurfaceCard {
             LabeledField("Name", name, { name = it }, error = error)
@@ -378,6 +388,7 @@ fun PlanDetailScreen(
     onEdit: (Machine) -> Unit,
     onDelete: (Machine) -> Unit,
     onEditPlan: () -> Unit,
+    onDeletePlan: () -> Unit,
     onStartWorkout: () -> Unit,
 ) {
     if (plan == null) {
@@ -385,6 +396,7 @@ fun PlanDetailScreen(
         return
     }
     var pending by remember { mutableStateOf<Machine?>(null) }
+    var confirmDeletePlan by remember { mutableStateOf(false) }
     AppScreen(
         title = plan.name,
         lead = listOf(ActivityCatalog.planLabel(plan), plan.description.ifBlank { "No description." }).joinToString(" · "),
@@ -393,7 +405,10 @@ fun PlanDetailScreen(
         showFab = true,
         fabLabel = "Add activity",
         onFab = onAdd,
-        actions = listOf(MenuAction("Edit plan") { onEditPlan() }),
+        actions = listOf(
+            MenuAction("Edit plan") { onEditPlan() },
+            MenuAction("Delete plan", destructive = true) { confirmDeletePlan = true },
+        ),
     ) {
         if (plan.machines.isNotEmpty()) {
             SecondaryButton("Start workout", onClick = onStartWorkout, contentDescription = "Start a workout with ${plan.name}")
@@ -425,6 +440,17 @@ fun PlanDetailScreen(
             confirmLabel = "Remove",
             onConfirm = { onDelete(machine); pending = null },
             onDismiss = { pending = null },
+        )
+    }
+    if (confirmDeletePlan) {
+        ConfirmDeleteDialog(
+            title = "Delete this plan?",
+            body = "Delete ${plan.name}? Past workouts stay in your history.",
+            onConfirm = {
+                confirmDeletePlan = false
+                onDeletePlan()
+            },
+            onDismiss = { confirmDeletePlan = false },
         )
     }
 }

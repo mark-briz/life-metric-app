@@ -66,6 +66,7 @@ private sealed class DeletedRecord {
     data class Session(val workout: Workout) : DeletedRecord()
     data class Entry(val workoutId: String, val entry: WorkoutEntry, val index: Int) : DeletedRecord()
     data class Activity(val planId: String, val machine: Machine, val index: Int) : DeletedRecord()
+    data class Plan(val plan: FitnessPlan, val index: Int) : DeletedRecord()
 }
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
@@ -290,6 +291,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     if (plan.id != planId) plan else plan.copy(machines = plan.machines.filterNot { it.id == machineId })
                 },
             )
+        }
+    }
+
+    /** Removes a plan. Logged workouts keep their data; a draft using this plan is discarded. */
+    fun deletePlan(planId: String) {
+        val plans = _state.value.store.plans
+        val index = plans.indexOfFirst { it.id == planId }
+        if (index < 0) return
+        val plan = plans[index]
+        offerUndo(DeletedRecord.Plan(plan, index), "Plan deleted")
+        _state.update { state ->
+            if (state.draftWorkout?.planId == planId) state.copy(draftWorkout = null) else state
+        }
+        mutate { store ->
+            store.copy(plans = store.plans.filterNot { it.id == planId })
         }
     }
 
@@ -555,6 +571,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         }
                     },
                 )
+            }
+            is DeletedRecord.Plan -> mutate { store ->
+                if (store.plans.any { it.id == item.plan.id }) {
+                    store
+                } else {
+                    val plans = store.plans.toMutableList()
+                    plans.add(item.index.coerceIn(0, plans.size), item.plan)
+                    store.copy(plans = plans)
+                }
             }
         }
     }

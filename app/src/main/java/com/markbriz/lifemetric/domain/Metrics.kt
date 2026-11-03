@@ -658,6 +658,7 @@ fun buildBloodPressureReport(
     targetDiastolic: Int?,
     generatedAt: String,
     today: String = todayIso(),
+    deviceName: String? = null,
 ): String {
     val last7 = bloodPressureInLastDays(readings, 7, today)
     val last30 = bloodPressureInLastDays(readings, 30, today)
@@ -666,6 +667,7 @@ fun buildBloodPressureReport(
     val listed = if (last30.isNotEmpty()) last30.asReversed() else chronologicalBp(readings).takeLast(30).asReversed()
     return buildString {
         appendLine("Life Metric blood pressure report")
+        normalizeReportDeviceName(deviceName)?.let { appendLine(it) }
         appendLine("Generated $generatedAt")
         appendLine("This is a personal log, not a diagnosis.")
         appendLine()
@@ -1048,8 +1050,10 @@ fun buildWeightCsv(records: List<WeightRecord>): String {
 fun buildWeightReport(
     records: List<WeightRecord>,
     generatedAt: String,
+    deviceName: String? = null,
 ): String = buildString {
     appendLine("Life Metric weight log")
+    normalizeReportDeviceName(deviceName)?.let { appendLine(it) }
     appendLine(generatedAt)
     appendLine()
     if (records.isEmpty()) {
@@ -1588,8 +1592,10 @@ fun buildWorkoutReport(
     workouts: List<Workout>,
     plans: List<FitnessPlan>,
     generatedAt: String,
+    deviceName: String? = null,
 ): String = buildString {
     appendLine("Life Metric workout log")
+    normalizeReportDeviceName(deviceName)?.let { appendLine(it) }
     appendLine(generatedAt)
     appendLine()
     if (workouts.isEmpty()) {

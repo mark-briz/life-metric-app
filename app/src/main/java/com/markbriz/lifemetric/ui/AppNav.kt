@@ -572,6 +572,12 @@ fun LifeMetricApp(viewModel: AppViewModel) {
                             }
                             error
                         },
+                        onDelete = existing?.let { plan ->
+                            {
+                                viewModel.deletePlan(plan.id)
+                                nav.popBackStack("plans", inclusive = false)
+                            }
+                        },
                     )
                 }
                 composable("planDetail/{id}") { entry ->
@@ -584,6 +590,12 @@ fun LifeMetricApp(viewModel: AppViewModel) {
                         onEdit = { machine -> nav.navigate("activityForm/${plan?.id}/${machine.id}") },
                         onDelete = { machine -> if (plan != null) viewModel.deleteActivity(plan.id, machine.id) },
                         onEditPlan = { if (plan != null) nav.navigate("planForm/${plan.id}") },
+                        onDeletePlan = {
+                            if (plan != null) {
+                                viewModel.deletePlan(plan.id)
+                                nav.popBackStack("plans", inclusive = false)
+                            }
+                        },
                         onStartWorkout = { if (plan != null) startSession(plan.id) },
                     )
                 }

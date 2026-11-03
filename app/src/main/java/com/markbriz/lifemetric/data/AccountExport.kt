@@ -124,8 +124,6 @@ private fun dataObject(store: FitnessStore): JsonObject {
     put(
         "profile",
         buildJsonObject {
-            put("firstName", store.profile.firstName)
-            put("lastName", store.profile.lastName)
             put("heightInches", store.profile.heightInches?.let { JsonPrimitive(it) } ?: JsonNull)
             put("weightGoalLb", store.profile.weightGoalLb?.let { JsonPrimitive(it) } ?: JsonNull)
             put("bpMovingAverageReadings", store.profile.bpMovingAverageReadings)
@@ -532,7 +530,6 @@ private fun normalizeBloodPressure(value: JsonElement?): List<BloodPressureReadi
 
 private fun isProfile(value: JsonElement?): Boolean {
     val record = value as? JsonObject ?: return false
-    if (record["firstName"].asString() == null || record["lastName"].asString() == null) return false
     val height = record["heightInches"]
     return height == null || height is JsonNull || (height.asNumber()?.let { it > 0 } == true)
 }
@@ -544,8 +541,6 @@ private fun normalizeProfile(value: JsonElement?): UserProfile {
     val window = record["bpMovingAverageReadings"].asNumber()
         ?.takeIf { it == Math.floor(it) }?.toInt()?.let(::clampBpWindow) ?: DEFAULT_BP_WINDOW
     return UserProfile(
-        firstName = record["firstName"].asString().orEmpty(),
-        lastName = record["lastName"].asString().orEmpty(),
         heightInches = record["heightInches"].asNumber()?.toInt(),
         weightGoalLb = goal,
         bpMovingAverageReadings = window,

@@ -59,6 +59,7 @@ import com.markbriz.lifemetric.domain.WorkoutWeekSummary
 import com.markbriz.lifemetric.domain.activityImproved
 import com.markbriz.lifemetric.domain.activityPersonalRecord
 import com.markbriz.lifemetric.domain.buildWorkoutCsv
+import com.markbriz.lifemetric.domain.buildWorkoutPrintTable
 import com.markbriz.lifemetric.domain.buildWorkoutReport
 import com.markbriz.lifemetric.domain.currentGroupLoad
 import com.markbriz.lifemetric.domain.draftHasDetails
@@ -136,6 +137,8 @@ import com.markbriz.lifemetric.ui.components.TextLink
 import com.markbriz.lifemetric.ui.components.WorkoutBarChart
 import com.markbriz.lifemetric.ui.components.appTextFieldColors
 import com.markbriz.lifemetric.ui.components.fieldShape
+import com.markbriz.lifemetric.ui.profile.deviceDisplayName
+import com.markbriz.lifemetric.ui.profile.printWorkoutTable
 import com.markbriz.lifemetric.ui.profile.shareWorkoutReport
 import com.markbriz.lifemetric.ui.theme.LocalAppColors
 import kotlinx.coroutines.delay
@@ -205,11 +208,25 @@ fun WorkoutsScreen(
         filterPlans.find { it.id == planFilter }?.let { plan -> add(ActiveFilter(plan.name) { setPlan(null) }) }
         filterFamilies.find { it.id == familyFilter }?.let { family -> add(ActiveFilter(family.chip) { setFamily(null) }) }
     }
+    val generatedAt = { "${formatDate(todayIso())} ${formatTime(nowTime())}" }
     val shareLog: () -> Unit = {
         shareWorkoutReport(
             context,
-            buildWorkoutReport(filtered, store.plans, "${formatDate(todayIso())} ${formatTime(nowTime())}"),
+            buildWorkoutReport(filtered, store.plans, generatedAt(), deviceName = deviceDisplayName(context)),
             buildWorkoutCsv(filtered, store.plans),
+        )
+    }
+    val printLog: () -> Unit = {
+        printWorkoutTable(
+            context,
+            "Workout history",
+            buildWorkoutPrintTable(
+                store.workouts,
+                store.plans,
+                store.profile,
+                generatedAt(),
+                deviceName = deviceDisplayName(context),
+            ),
         )
     }
     AppScreen(
@@ -221,6 +238,7 @@ fun WorkoutsScreen(
             MenuAction("Plans") { onPlans() },
             MenuAction("How to log") { onHowToLog() },
             if (store.workouts.isNotEmpty()) MenuAction("Share log") { shareLog() } else null,
+            if (store.workouts.isNotEmpty()) MenuAction("Print") { printLog() } else null,
             MenuAction("Workout settings") { onSettings() },
         ),
     ) {
@@ -537,7 +555,12 @@ fun WorkoutFormScreen(
     val shareSession = {
         shareWorkoutReport(
             context,
-            buildWorkoutReport(listOf(workout), store.plans, "${formatDate(todayIso())} ${formatTime(nowTime())}"),
+            buildWorkoutReport(
+                listOf(workout),
+                store.plans,
+                "${formatDate(todayIso())} ${formatTime(nowTime())}",
+                deviceName = deviceDisplayName(context),
+            ),
             buildWorkoutCsv(listOf(workout), store.plans),
         )
     }

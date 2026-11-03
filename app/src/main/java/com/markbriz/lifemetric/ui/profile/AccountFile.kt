@@ -3,10 +3,17 @@ package com.markbriz.lifemetric.ui.profile
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.provider.Settings
 import androidx.core.content.FileProvider
 import com.markbriz.lifemetric.data.accountExportFilename
 import java.io.File
 import java.time.LocalDateTime
+
+/** User-visible phone name from Settings (About phone), or null if unset. */
+fun deviceDisplayName(context: Context): String? =
+    runCatching {
+        Settings.Global.getString(context.contentResolver, Settings.Global.DEVICE_NAME)
+    }.getOrNull()?.trim()?.takeIf { it.isNotEmpty() }
 
 /** Writes the JSON to the app cache and opens the share sheet so the user can save it. */
 fun shareBloodPressureReport(context: Context, report: String, csv: String, now: LocalDateTime = LocalDateTime.now()) {
