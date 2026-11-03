@@ -145,6 +145,16 @@ object ActivityCatalog {
 
     fun schema(id: String): String = get(id).schema
 
+    /**
+     * Schema to show and save for one set. An existing set keeps the schema it was logged
+     * with, so changing the plan's activity type later cannot rewrite that set into empty
+     * fields for the new type.
+     */
+    fun entrySchema(existing: WorkoutEntry?, activityTypeId: String): String {
+        val stored = existing?.schema?.takeIf { candidate -> types.any { it.schema == candidate } }
+        return stored ?: schema(activityTypeId)
+    }
+
     fun category(id: String): String = typeToCategory[id] ?: "strength"
 
     fun typesIn(familyId: String): List<ActivityType> = types.filter { it.familyId == familyId }

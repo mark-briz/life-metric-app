@@ -816,7 +816,7 @@ private fun WorkoutEntryForm(
     onSave: (entry: WorkoutEntry, addAnother: Boolean) -> Unit,
 ) {
     val colors = LocalAppColors.current
-    val schema = ActivityCatalog.schema(plan.activityTypeId)
+    val schema = ActivityCatalog.entrySchema(existing, plan.activityTypeId)
     if (missing) {
         val noun = ActivityCatalog.entryNoun(schema, 1)
         SheetTitle("${noun.replaceFirstChar { it.uppercase() }} not found", "That $noun may have been deleted.")
@@ -847,7 +847,11 @@ private fun WorkoutEntryForm(
     )
     fun prefillFor(forMachineId: String) = sessionPrefillEntry(otherEntries, forMachineId, schema)
     val unit = weightUnit(useKg)
-    val extraMetrics = ActivityCatalog.entryMetrics(plan.activityTypeId)
+    val extraMetrics = if (schema == ActivityCatalog.schema(plan.activityTypeId)) {
+        ActivityCatalog.entryMetrics(plan.activityTypeId)
+    } else {
+        emptyList()
+    }
     val initialSession = if (isNew && machineId.isNotBlank()) sessionPrefillEntry(otherEntries, machineId, schema) else null
     val initialPrevious = if (isNew && machineId.isNotBlank()) prefillFor(machineId) else null
     fun durationField(entry: WorkoutEntry?): String {

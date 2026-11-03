@@ -2,6 +2,7 @@ package com.markbriz.lifemetric
 
 import com.markbriz.lifemetric.domain.BloodPressureChartRange
 import com.markbriz.lifemetric.domain.BloodPressurePeriod
+import com.markbriz.lifemetric.domain.REMOVED_ACTIVITY_NAME
 import com.markbriz.lifemetric.domain.averageBloodPressureSamples
 import com.markbriz.lifemetric.domain.bloodPressureDelta
 import com.markbriz.lifemetric.domain.bloodPressureGaugeProgress
@@ -12,6 +13,7 @@ import com.markbriz.lifemetric.domain.bloodPressureSaveHint
 import com.markbriz.lifemetric.domain.bloodPressureSaveWarning
 import com.markbriz.lifemetric.domain.bloodPressureStatus
 import com.markbriz.lifemetric.domain.bloodPressureVisitSummary
+import com.markbriz.lifemetric.domain.plansWithLoggedActivities
 import com.markbriz.lifemetric.domain.BpStatus
 import com.markbriz.lifemetric.domain.BloodPressureTag
 import com.markbriz.lifemetric.domain.buildBloodPressureCsv
@@ -430,6 +432,14 @@ class MetricsTest {
         assertEquals(90, parseDurationInput("1:30"))
         assertEquals(120, parseDurationInput("2"))
         assertNull(parseDurationInput("1:70"))
+    }
+
+    @Test
+    fun editedEntryKeepsRecordedSchemaWhenPlanTypeChanges() {
+        val logged = WorkoutEntry("e", "p", "m", schema = "load", weight = 135.0, repetitions = 8)
+        assertEquals("load", ActivityCatalog.entrySchema(logged, "running"))
+        assertEquals("distance_time", ActivityCatalog.entrySchema(null, "running"))
+        assertEquals("distance_time", ActivityCatalog.entrySchema(logged.copy(schema = "not-a-schema"), "running"))
     }
 
     @Test
@@ -870,6 +880,32 @@ class MetricsTest {
         assertEquals("90s", formatWorkoutRestTimer(90))
         assertEquals("1:30", formatRestClock(90))
         assertEquals("1 set · 1,080 lb · travel gym", summarizeWorkout(workout))
+    }
+
+    @Test
+    fun exportRepairKeepsOnePlaceholderForARemovedActivity() {
+        val workout = Workout(
+            "w1",
+            "2026-10-01",
+            "plan-1",
+            "strength_training",
+            listOf(
+                load("e1", "plan-1", "machine-1", 100.0, 8),
+                load("e2", "plan-1", "machine-1", 110.0, 6),
+            ),
+        )
+        val plan = FitnessPlan(
+            id = "plan-1",
+            name = "Upper",
+            activityTypeId = "strength_training",
+            category = "strength",
+            machines = listOf(Machine("machine-2", "Row")),
+        )
+        val repaired = plansWithLoggedActivities(listOf(plan), listOf(workout))
+        assertEquals(listOf("machine-2", "machine-1"), repaired[0].machines.map { it.id })
+        assertEquals(REMOVED_ACTIVITY_NAME, repaired[0].machines[1].name)
+        val complete = plan.copy(machines = plan.machines + Machine("machine-1", "Bench"))
+        assertEquals(complete, plansWithLoggedActivities(listOf(complete), listOf(workout))[0])
     }
 
     @Test

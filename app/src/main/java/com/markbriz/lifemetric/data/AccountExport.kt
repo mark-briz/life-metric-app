@@ -5,6 +5,7 @@ import com.markbriz.lifemetric.domain.MAX_WAIST_IN
 import com.markbriz.lifemetric.domain.MIN_WAIST_IN
 import com.markbriz.lifemetric.domain.clampBpWindow
 import com.markbriz.lifemetric.domain.WorkoutSetKind
+import com.markbriz.lifemetric.domain.plansWithLoggedActivities
 import com.markbriz.lifemetric.domain.roundToTenth
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -48,12 +49,13 @@ fun accountExportFilename(now: LocalDateTime): String =
     )
 
 fun buildAccountExport(store: FitnessStore, themeId: String, exportedAt: String): String {
+    val exportable = store.copy(plans = plansWithLoggedActivities(store.plans, store.workouts))
     val root = buildJsonObject {
         put("format", ACCOUNT_EXPORT_FORMAT)
         put("version", ACCOUNT_EXPORT_VERSION)
         put("exportedAt", exportedAt)
         put("themeId", themeId)
-        put("data", dataObject(store))
+        put("data", dataObject(exportable))
     }
     return prettyJson.encodeToString(JsonObject.serializer(), root)
 }
